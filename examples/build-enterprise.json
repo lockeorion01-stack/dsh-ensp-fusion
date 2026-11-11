@@ -1,0 +1,83 @@
+{
+  "output_path": "enterprise.topo",
+  "auto_layout": false,
+  "first_com_port": 9300,
+  "devices": [
+    {
+      "name": "ENT-PC",
+      "model": "PC",
+      "options": {
+        "x": 250,
+        "y": 300,
+        "pc": {
+          "ip": "192.168.10.10",
+          "mask": "255.255.255.0",
+          "gateway": "192.168.10.1"
+        }
+      }
+    },
+    {
+      "name": "ENT-SW",
+      "model": "S5700",
+      "options": {
+        "x": 450,
+        "y": 300
+      }
+    },
+    {
+      "name": "ENT-FW",
+      "model": "USG6000V",
+      "options": {
+        "x": 650,
+        "y": 300
+      }
+    },
+    {
+      "name": "ISP-R1",
+      "model": "AR2220",
+      "options": {
+        "x": 850,
+        "y": 300
+      }
+    },
+    {
+      "name": "INET-PC",
+      "model": "PC",
+      "options": {
+        "x": 1050,
+        "y": 300,
+        "pc": {
+          "ip": "198.51.100.10",
+          "mask": "255.255.255.0",
+          "gateway": "198.51.100.1"
+        }
+      }
+    }
+  ],
+  "links": [
+    {
+      "a": "ENT-PC",
+      "a_port": "Ethernet0/0/1",
+      "b": "ENT-SW",
+      "b_port": "GigabitEthernet0/0/1"
+    },
+    {
+      "a": "ENT-SW",
+      "a_port": "GigabitEthernet0/0/2",
+      "b": "ENT-FW",
+      "b_port": "GigabitEthernet1/0/1"
+    },
+    {
+      "a": "ENT-FW",
+      "a_port": "GigabitEthernet1/0/2",
+      "b": "ISP-R1",
+      "b_port": "GigabitEthernet0/0/0"
+    },
+    {
+      "a": "ISP-R1",
+      "a_port": "GigabitEthernet0/0/1",
+      "b": "INET-PC",
+      "b_port": "Ethernet0/0/1"
+    }
+  ]
+}

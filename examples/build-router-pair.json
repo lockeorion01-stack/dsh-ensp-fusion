@@ -1,0 +1,7 @@
+{
+  "output_path": "router-pair.topo",
+  "devices": [{ "name": "R1", "model": "AR2220" }, { "name": "R2", "model": "AR2220" }],
+  "links": [{ "a": "R1", "a_port": "GigabitEthernet0/0/0", "b": "R2", "b_port": "GigabitEthernet0/0/0" }],
+  "first_com_port": 2000,
+  "auto_layout": true
+}

@@ -1,0 +1,20 @@
+{
+  "title": "示例验收计划：请按实际拓扑调整",
+  "topology_path": "../test/fixtures/minimal.topo",
+  "devices": [
+    {
+      "device": "SW1",
+      "commands": [
+        { "cmd": "display version", "expect": "VRP", "layer": "configuration" },
+        { "cmd": "display ip interface brief", "expect": "/Vlanif10\\s+10\\.0\\.0\\.1\\/24\\s+up\\s+up/i", "layer": "interface" }
+      ]
+    },
+    {
+      "device": "SW2",
+      "commands": [
+        { "cmd": "display ip routing-table", "expect": "0.0.0.0/0", "layer": "routing" },
+        { "cmd": "ping -c 3 10.0.0.1", "expect": "/(?:^|[^0-9])0(?:\\.0+)?% packet loss/i", "layer": "connectivity" }
+      ]
+    }
+  ]
+}

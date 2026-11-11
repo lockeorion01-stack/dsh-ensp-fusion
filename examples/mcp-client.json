@@ -1,0 +1,13 @@
+﻿{
+  "mcpServers": {
+    "ensp-fusion": {
+      "command": "node",
+      "args": [
+        "C:/tools/dsh-ensp-fusion/bin/dsh-ensp-mcp.mjs",
+        "--workspace",
+        "C:/labs/ensp"
+      ]
+    }
+  }
+}
+

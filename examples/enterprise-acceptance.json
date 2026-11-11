@@ -1,0 +1,74 @@
+{
+  "title": "Enterprise firewall NAT acceptance",
+  "devices": [
+    {
+      "device": "ENT-SW",
+      "port": 9300,
+      "commands": [
+        {
+          "cmd": "display vlan 10",
+          "expect": "10"
+        },
+        {
+          "cmd": "ping -c 3 192.168.10.10",
+          "expect": "0.00% packet loss"
+        },
+        {
+          "cmd": "ping -c 3 198.51.100.10",
+          "expect": "0.00% packet loss"
+        }
+      ]
+    },
+    {
+      "device": "ENT-FW",
+      "port": 9301,
+      "username": "admin",
+      "commands": [
+        {
+          "cmd": "display ip interface brief",
+          "expect": [
+            "192.168.10.1/24",
+            "203.0.113.2/30"
+          ]
+        },
+        {
+          "cmd": "display security-policy rule all",
+          "expect": "/LAN-OUT\\s+enable\\s+permit/"
+        },
+        {
+          "cmd": "display nat-policy rule all",
+          "expect": [
+            "LAN-SNAT",
+            "src-nat"
+          ]
+        },
+        {
+          "cmd": "display ip routing-table",
+          "expect": "203.0.113.1"
+        },
+        {
+          "cmd": "display startup",
+          "expect": "vrpcfg.cfg"
+        }
+      ]
+    },
+    {
+      "device": "ISP-R1",
+      "port": 9302,
+      "commands": [
+        {
+          "cmd": "ping -c 3 198.51.100.10",
+          "expect": "0.00% packet loss"
+        },
+        {
+          "cmd": "ping -c 3 203.0.113.2",
+          "expect": "0.00% packet loss"
+        },
+        {
+          "cmd": "display startup",
+          "expect": "vrpcfg.zip"
+        }
+      ]
+    }
+  ]
+}

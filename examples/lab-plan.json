@@ -1,0 +1,27 @@
+{
+  "topology": "../test/fixtures/minimal.topo",
+  "templates": {
+    "switch_vlan": [
+      "sysname {{hostname}}",
+      "vlan {{vlan}}",
+      "description {{description}}",
+      "quit"
+    ]
+  },
+  "devices": [
+    {
+      "device": "SW1",
+      "template": "switch_vlan",
+      "vars": { "hostname": "SW1", "vlan": 10, "description": "Lab_users" },
+      "system_view": true,
+      "save": true
+    },
+    {
+      "device": "SW2",
+      "commands": ["display version"],
+      "expect": [["VRP"]],
+      "system_view": false,
+      "save": false
+    }
+  ]
+}
