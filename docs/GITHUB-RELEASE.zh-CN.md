@@ -1,6 +1,6 @@
 # GitHub 提交与发布准备
 
-1.1.0 已于 2026-11-12 发布：GitHub 预发布 Release（tag `v1.1.0`，提交 `6aee0f4`）与 npm 包 `dsh-ensp-fusion@1.1.0`。本文保留发布前的准备记录供追溯。
+1.1.0 已于 2026-11-12 发布 GitHub 预发布 Release（tag `v1.1.0`）；npm 包 `dsh-ensp-fusion@1.1.0` 尚未发布。本文保留发布前的准备记录供追溯。
 
 ## 本轮准备内容
 

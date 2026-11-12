@@ -40,7 +40,7 @@ node bin/ensp-fusion.mjs tools
 
 tools应输出16个工具。即使只用MCP/CLI，也要安装本包的Node依赖，包括@deepseek-ai/dsh-tools与@deepseek-ai/schemastery；不要求启动DSH应用，但不能只复制入口JS。
 
-npm 包 `dsh-ensp-fusion@1.1.0` 已发布（GitHub 侧为预发布 Release）；部署既可用完整源码，也可从 npm 安装。不要把 npm publish 当部署流程。分发包的files清单不包含完整开发脚本、测试和锁文件；npm test、check:plugin等维护命令应在完整源码工程运行。
+npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整源码或本地打包安装。不要把 npm publish 当部署流程。分发包的files清单不包含完整开发脚本、测试和锁文件；npm test、check:plugin等维护命令应在完整源码工程运行。
 
 插件代码和实验工作区分离。topo必须与配套GUID设备目录一起迁移。运行中的eNSP不会自动切换文件路径；迁移后应从新路径重开，检查服务目录和保存状态，不能在仍引用旧路径的窗口继续保存。迁移时由实验维护者决定何时保存、停止与重开。
 
