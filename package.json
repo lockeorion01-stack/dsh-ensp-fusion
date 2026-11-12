@@ -12,11 +12,11 @@
     "./presets": "./upstream/lizi600jin/src/core/presets.mjs"
   },
   "bin": {
-    "ensp-fusion": "./bin/ensp-fusion.mjs",
-    "ensp-fusion-mcp": "./bin/dsh-ensp-mcp.mjs",
-    "ensp-fusion-lab": "./bin/dsh-ensp-lab.mjs",
-    "ensp-fusion-accept": "./bin/ensp-fusion-accept.mjs",
-    "ensp-fusion-doctor": "./bin/ensp-fusion-doctor.mjs"
+    "ensp-fusion": "bin/ensp-fusion.mjs",
+    "ensp-fusion-mcp": "bin/dsh-ensp-mcp.mjs",
+    "ensp-fusion-lab": "bin/dsh-ensp-lab.mjs",
+    "ensp-fusion-accept": "bin/ensp-fusion-accept.mjs",
+    "ensp-fusion-doctor": "bin/ensp-fusion-doctor.mjs"
   },
   "dsh": {
     "bundle": {
