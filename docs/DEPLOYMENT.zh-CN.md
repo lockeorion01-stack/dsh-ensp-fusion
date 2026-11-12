@@ -79,9 +79,11 @@ npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整�
 
 MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作为命令行选项。GUI批次可使用工具timeout_ms；配置API另有timeoutMs。
 
-1.1.0 初始化后应列出16工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的快照，拓扑变更后需重新list。新增服务验收与兼容性说明见 REMAINING-MODULES.zh-CN.md。
+1.1.1 初始化后应列出16工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的快照，拓扑变更后需重新list。新增服务验收与兼容性说明见 REMAINING-MODULES.zh-CN.md。
 
 ## 4. DSH接入
+
+1.1.1的目标宿主为**DSH 0.2.2-rc.1**，peer依赖为`@deepseek-ai/dsh-tools@0.2.2-rc.1`和`@deepseek-ai/schemastery@3.19.0`。1.1.0的旧SDK声明会被该宿主拦截，升级到本次源码或修复包；不要通过编辑宿主或授予版本豁免掩盖不匹配。其他DSH版本须另行核验，具体安装及隔离宿主检查见[1.1.1修复说明](releases/1.1.1.zh-CN.md)。
 
 在现有profile合并下列片段，保留其他依赖和bundle：
 
@@ -145,6 +147,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 | 现象 | 检查与处理 |
 | --- | --- |
 | ERR_MODULE_NOT_FOUND | 源码根目录按锁文件npm ci，检查peer依赖，不只复制入口 |
+| 1.1.0与DSH 0.2.2-rc.1不兼容 | 更新到1.1.1源码/修复包并解析依赖，确认加载的是新版后重新加载插件；见1.1.1发布说明 |
 | node找不到/版本不符 | 检查客户端PATH，必要时用node.exe绝对路径 |
 | Python导入失败 | 用实际配置解释器执行-m pip和import测试 |
 | 桥失败/1223 | 检查解释器、权限和是否拒绝UAC |

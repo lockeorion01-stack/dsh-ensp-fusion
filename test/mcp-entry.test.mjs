@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const entry = fileURLToPath(new URL('../bin/dsh-ensp-mcp.mjs', import.meta.url))
 const run = args => spawnSync(process.execPath, [entry, ...args], {encoding:'utf8',timeout:5000,windowsHide:true})
 
@@ -12,7 +14,7 @@ test('MCP entry accepts separate GUI and document Python paths', () => {
   ]) {
     const r = run([...args,'--version'])
     assert.equal(r.status,0,r.stderr)
-    assert.equal(r.stdout.trim(),'1.1.0')
+    assert.equal(r.stdout.trim(),version)
   }
   const help = run(['--help'])
   assert.match(help.stdout,/--docs-python/)

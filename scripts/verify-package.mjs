@@ -5,12 +5,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 const root=fileURLToPath(new URL('../',import.meta.url))
+const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8'))
 const npm=process.platform==='win32'?'npm.cmd':'npm'
 function run(command,args,cwd){const r=spawnSync(command,args,{cwd,encoding:'utf8',shell:process.platform==='win32'&&command===npm,windowsHide:true});if(r.status!==0)throw Error(r.stdout+r.stderr);return r.stdout}
 const temp=await mkdtemp(join(tmpdir(),'ensp-fusion-package-'))
 try{
   const metadata=JSON.parse(run(npm,['pack','--ignore-scripts','--json','--pack-destination',temp],root))[0]
-  for(const file of ['index.js','base.js','LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','test/fixtures/minimal.topo','lib/bridge.py','lib/usg-health.js','requirements-windows.lock.txt','bin/ensp-fusion-accept.mjs','bin/ensp-fusion-doctor.mjs','CHANGELOG.md','CONTRIBUTING.md','docs/releases/1.1.0.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','docs/GITHUB-RELEASE.zh-CN.md'])assert.ok(metadata.files.some(f=>f.path===file),file)
+  for(const file of ['index.js','base.js','LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','test/fixtures/minimal.topo','lib/bridge.py','lib/usg-health.js','requirements-windows.lock.txt','bin/ensp-fusion-accept.mjs','bin/ensp-fusion-doctor.mjs','CHANGELOG.md','CONTRIBUTING.md',`docs/releases/${manifest.version}.zh-CN.md`,'docs/KNOWN-ISSUES.zh-CN.md','docs/GITHUB-RELEASE.zh-CN.md'])assert.ok(metadata.files.some(f=>f.path===file),file)
   run('tar',['-xf',join(temp,metadata.filename),'-C',temp],temp)
   const pkg=join(temp,'package')
   await writeFile(join(pkg,'package-lock.json'),await readFile(resolve(root,'package-lock.json')))

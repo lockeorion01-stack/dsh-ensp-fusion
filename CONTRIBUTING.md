@@ -13,6 +13,8 @@ git diff --check
 
 `test:package`需要本机npm缓存和tar，验证离线干净安装及打包入口。GUI实测依赖Windows/eNSP环境，不由这些检查自动启动。`check:plugin`使用注册契约检查，不表示完整DSH宿主已运行。
 
+修改DSH依赖或插件契约时，在目标DSH桌面环境额外执行`npm run check:dsh`，核对实际宿主的兼容性判定、服务注册、原生执行器及卸载。非默认安装位置通过`-- --app "C:/path/to/DeepSeek Harness.exe"`指定；报告默认在系统临时目录`dsh-ensp-fusion/dsh-host-check.json`。隔离验证不修改profile，也不代表完整模型会话或设备业务通过。
+
 ## 修改约定
 
 - DSH/MCP/CLI共用工具实现；变更参数同步更新schema、示例、相关测试及文档。

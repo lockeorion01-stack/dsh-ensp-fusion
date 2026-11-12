@@ -1,6 +1,6 @@
 {
   "name": "dsh-ensp-fusion",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Huawei eNSP unified DSH/MCP/CLI plugin: topology construction, scenarios, hardened automation, convergence and evidence reports",
   "license": "GPL-3.0-or-later",
@@ -49,6 +49,7 @@
     "test:fusion": "node --test test/fusion.test.mjs",
     "test:package": "node scripts/verify-package.mjs",
     "check:plugin": "node scripts/check-plugin.mjs",
+    "check:dsh": "node scripts/check-dsh-host.mjs",
     "audit:sources": "node scripts/audit-sources.mjs",
     "check:release": "node scripts/check-release.mjs"
   },
@@ -56,7 +57,7 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "3.19.0"
   }
 }
