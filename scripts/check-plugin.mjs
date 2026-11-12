@@ -56,7 +56,7 @@ await check('package contents and syntax', async () => {
   assert.ok(!files.some(f=>/^(node_modules|test-results)\//.test(f)))
   const scripts=files.filter(f=>/\.(mjs|js)$/.test(f))
   for(const file of scripts){const s=spawnSync(process.execPath,['--check',join(root,file)],{encoding:'utf8',windowsHide:true,timeout:5000});assert.equal(s.status,0,`${file}: ${s.stderr}`)}
-  return {files:files.length,syntaxChecked:scripts.length,privatePackage:pkg.private,publication:'local package only'}
+  return {files:files.length,syntaxChecked:scripts.length,privatePackage:pkg.private,publication:pkg.private?'local package only':'public npm package'}
 })
 if(process.platform==='win32') {
   try {

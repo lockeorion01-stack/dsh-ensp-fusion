@@ -1,7 +1,6 @@
 {
   "name": "dsh-ensp-fusion",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
   "description": "Huawei eNSP unified DSH/MCP/CLI plugin: topology construction, scenarios, hardened automation, convergence and evidence reports",
   "license": "GPL-3.0-or-later",

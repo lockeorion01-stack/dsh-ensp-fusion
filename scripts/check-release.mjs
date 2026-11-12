@@ -23,7 +23,7 @@ async function main(){
  const pkg=JSON.parse(await readFile(resolve(root,'package.json'),'utf8')),lock=JSON.parse(await readFile(resolve(root,'package-lock.json'),'utf8'))
  if(pkg.version!==lock.version||pkg.version!==lock.packages?.['']?.version)issue('package-lock.json','package versions differ')
  if(JSON.stringify(pkg.peerDependencies)!==JSON.stringify(lock.packages?.['']?.peerDependencies))issue('package-lock.json','peer dependency versions differ')
- if(pkg.private!==true)issue('package.json','local package publication boundary changed')
+ if(pkg.private===true)issue('package.json','publication requested but package.json still marks private:true')
  const required=['README.md','CHANGELOG.md','CONTRIBUTING.md','NOTICE.md','LICENSE','LICENSE-MIT','docs/GITHUB-RELEASE.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','docs/TOTAL-ACCEPTANCE.zh-CN.md','docs/releases/'+pkg.version+'.zh-CN.md']
  for(const file of required){try{if(!(await stat(resolve(root,file))).isFile())issue(file,'required release file is not a file')}catch{issue(file,'required release file missing')}}
  const docs=['README.md','CHANGELOG.md','CONTRIBUTING.md','NOTICE.md',...(await walk('docs')).filter(f=>f.endsWith('.md'))]
@@ -70,7 +70,7 @@ async function main(){
  const packed=new Set(pack.files.map(f=>f.path))
  for(const file of ['README.md','CHANGELOG.md','CONTRIBUTING.md','docs/releases/'+pkg.version+'.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','LICENSE','LICENSE-MIT'])if(!packed.has(file))issue(file,'required distributed documentation missing from package')
  for(const file of packed)if(forbidden.test(file)||privateDir.test(file))issue(file,'local/private artifact is packed')
- const report={ok:findings.length===0,version:pkg.version,publication:'pending; no Git mutation or network operation',checks:{documents:docs.length,relative_links:links,git_candidates:candidate.length,text_files_scanned:scanned,package_files:packed.size,ignore_probes:probes.length},findings,limits:['Finite filename and high-confidence content patterns; not a complete secret scanner.','Does not inspect Git history, remote repository, dependency vulnerabilities, or device business.']}
+ const report={ok:findings.length===0,version:pkg.version,publication:pkg.private?'local package only; no Git mutation or network operation':'public npm package; no Git mutation or network operation',checks:{documents:docs.length,relative_links:links,git_candidates:candidate.length,text_files_scanned:scanned,package_files:packed.size,ignore_probes:probes.length},findings,limits:['Finite filename and high-confidence content patterns; not a complete secret scanner.','Does not inspect Git history, remote repository, dependency vulnerabilities, or device business.']}
  console.log(JSON.stringify(report,null,2));if(!report.ok)process.exitCode=1
 }
 main().catch(error=>{console.error(JSON.stringify({ok:false,error:error.message}));process.exitCode=1})
