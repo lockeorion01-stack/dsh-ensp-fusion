@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "deadline_ms": 120000,
+  "steps": [
+    {
+      "name": "switch-version",
+      "tool": "ensp_cli",
+      "args": {
+        "port": 2000,
+        "commands": ["display version"],
+        "expect": ["VRP"],
+        "save": false
+      }
+    }
+  ]
+}

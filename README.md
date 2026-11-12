@@ -2,11 +2,40 @@
 
 面向开发者和网络实验人员的华为 eNSP 自动化插件。将拓扑文件操作、设备控制台配置、GUI 操作、协议收敛检查和实验取证统一为同一组工具，提供 **DSH 插件、MCP stdio 服务、CLI** 三种入口。
 
-当前源码版本 1.0.0，package.json 标记 private: true。使用本地源码或本地打包安装，不应假定已经发布到 npm。
+当前源码版本 **1.1.0，待发布**；package.json 保持 private: true。使用完整源码或本地打包安装，尚未发布到 npm。
+
+2026-11-12 限定环境验证：291项Node测试、24项MCP冒烟、打包与插件检查通过；原生HTTP/DNS/FTP及四台园区Server修复副本通过对应范围实机核验。USG两轮0.5/2/8 Mbps、1/8/32 UDP流的入口/出口零丢包。**整体现场业务总验收仍为FAIL**：企业端到端瓶颈、冷ARP丢包和指定S5700固件TCP隔离尚未解决。见仓库内[验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md)和[已知问题](docs/KNOWN-ISSUES.zh-CN.md)；原始现场数据不随仓库分发。
+
+## 本次更新
+
+相对于1.0.0初始基线，统一工具从12增至16，增加配置前探查、离线诊断、LLDP交叉核对和应用服务探测；新增验收编排与环境诊断CLI，并完善控制台锁、变更日志、受保护恢复、业务证据判定、GUI定位和拓扑编码。
+
+- [全部更新记录](CHANGELOG.md)：新增、修复、行为变化及验证边界。
+- [1.1.0发布说明与迁移](docs/releases/1.1.0.zh-CN.md)：新入口、计划迁移及发布正文。
+- [GitHub提交与发布准备](docs/GITHUB-RELEASE.zh-CN.md)：本地检查、提交范围和后续推送步骤。
+
+## 快速开始
+
+在完整源码根目录执行，Node.js要求20及以上：
+
+```powershell
+npm ci --ignore-scripts
+node bin/ensp-fusion.mjs tools
+node bin/ensp-fusion-doctor.mjs --help
+node bin/ensp-fusion-accept.mjs --help
+```
+
+`tools`应列出16项。这些命令不启动设备。实际GUI和控制台任务需要另行准备eNSP、设备镜像、Python依赖及独立实验工作区；MCP配置和DSH接入见[部署手册](docs/DEPLOYMENT.zh-CN.md)。
 
 ## 项目完成了什么
 
-本项目把三个本地来源整合为统一工程：YunoSeng 的基础自动化和文档流程、ENSPLB 的设备会话与验收增强、lizi600jin 的拓扑构建和场景指导。统一入口注册 **12 个工具**，MCP 和 CLI 复用插件实现，避免维护三套执行逻辑。
+本项目把三个本地来源整合为统一工程：YunoSeng 的基础自动化和文档流程、ENSPLB 的设备会话与验收增强、lizi600jin 的拓扑构建和场景指导。1.1.0 统一入口注册 **16 个工具**，MCP 和 CLI 复用插件实现，避免维护三套执行逻辑。
+
+参考 grbj-ensp-mcp v0.2.2 的查缺补漏见 [对比分析与补齐说明](docs/GRBJ-COMPARISON.zh-CN.md)。新增 ensp_inspect（配置前只读探查）、ensp_diagnose（离线错误诊断）、ensp_lldp（LLDP 链路交叉比对）。
+
+正式验收后的交互确认、USG 探查、键盘启动与终端等待修复见 [实机问题修复说明](docs/LIVE-FIXES.zh-CN.md)。
+
+正式任务编排与恢复前置校验见 [统一验收手册](docs/ACCEPTANCE-RUNNER.zh-CN.md)：`ensp-fusion-accept run` 执行带断言及清理的计划，`status` 检查未完成运行。`ensp-fusion-doctor` 只读检查环境；Python 已验证版本组合固定在 `requirements-windows.lock.txt`。原生 Client/Server 可直接由 ensp_build 生成，并通过 options.pc 配置 IPv4 和 DNS。
 
 调用方可以按“创建或读取拓扑 → 下发配置 → 等待收敛 → 执行断言 → 保存证据”的顺序组织实验，并读取每一步的错误和未执行项。项目解决重复开窗、手动配置、反复截图及整理报告的问题。
 
@@ -20,9 +49,13 @@
 | ensp_topo | 离线读取/修改拓扑、设备名、IPv4、控制台端口 | 文件修改不等于运行现场修改 |
 | ensp_build | 从结构化设备和链路生成新拓扑 | 不覆盖文件，不启动设备，不提供镜像 |
 | ensp_scenarios | 搜索、读取23个实验指导 | 指导不是完整下发配置 |
-| ensp_cli | Telnet控制台认证、逐命令配置、断言和保存确认 | 失败停止，已生效配置不自动回滚 |
+| ensp_cli | Telnet认证、配置断言、保存确认、变更预览、可选快照日志与显式恢复 | 失败停止，已生效配置不自动回滚 |
 | ensp_wait | 等待display输出、OSPF Full邻居或OSPF路由 | 不是所有协议的通用收敛判定器 |
 | ensp_labtest | 按只读计划验收，输出Markdown/CSV/JSON | 需要明确expect，区分PASS/FAIL/ERROR/SKIPPED |
+| ensp_services | HTTP内容、指定DNS解析、匿名FTP下载SHA256、TCP及重复采样 | 宿主机发起，不能替代eNSP PC的路径验收 |
+| ensp_lldp | 显式链路或topo_path、时间戳、逐链路双向证据 | 默认五分钟新鲜度；缺少证据返回INCONCLUSIVE |
+| ensp_inspect | 版本、配置、接口、路由及LLDP采集，历史版本兼容性识别 | 调用成功不代表当前业务健康 |
+| ensp_diagnose | 离线错误分类、丢包诊断及只读探测建议 | UNKNOWN不能视为健康，不自动修复 |
 | ensp_gui | 批量窗口操作、启动/停止、设备就绪检测 | 依赖Windows交互桌面、权限及eNSP |
 | ensp_shot | 主窗口、设备窗口及屏幕截图 | 截图成功不表示业务成功 |
 | ensp_capture | 批量开窗、只读回显及截图取证 | 不应为截图重复执行配置命令 |
@@ -31,7 +64,7 @@
 
 另有离线实验配置计划生成、Mermaid源码导出，入口为 bin/dsh-ensp-lab.mjs。计划生成不执行设备命令，图导出不渲染PNG。
 
-通用构建器支持11种型号：S5700、S3700、AR2220、AR2240、AR1220、USG5500、USG6000V、AC6005、PC、Server、Cloud。设备名要求ASCII标识符。园区实验中的AP/STA/Client原生XML适配属于实验脚本，不能当作通用构建器已支持。
+通用构建器支持12种型号：S5700、S3700、AR2220、AR2240、AR1220、USG5500、USG6000V、AC6005、PC、Client、Server、Cloud。设备名要求ASCII标识符。Client/Server 使用原生Ethernet接口声明及IP/DNS启动参数；服务目录与启动需单独恢复和验收。园区实验中的AP/STA原生XML适配仍属于实验脚本，不能当作通用构建器已支持。
 
 ## 架构与目录
 
@@ -56,6 +89,10 @@
 
 详细步骤见 **[部署与运维手册](docs/DEPLOYMENT.zh-CN.md)**，包含依赖、目录、MCP/DSH配置、权限和排错。
 
+优先改进已加入结果失败传递、跨进程控制台锁，以及 `ensp_cli` 的变更预览、快照、日志检索和显式恢复。参数示例及验证边界见 [变更管理说明](docs/CHANGE-MANAGEMENT.zh-CN.md)。
+
+新增模块、兼容性矩阵及迁移要求见 [1.1.0 完善说明](docs/REMAINING-MODULES.zh-CN.md)。
+
 最小源码检查（PowerShell，按本机路径修改）：
 
 ```powershell
@@ -66,11 +103,11 @@ npm ci --ignore-scripts
 node bin/ensp-fusion.mjs tools
 ```
 
-Node要求20及以上，tools应列出12工具。此检查不启动eNSP。需要GUI时安装Python的pywin32和Pillow；需要Word报告时安装python-docx。实验输出使用独立工作区。
+Node要求20及以上，tools应列出16工具。此检查不启动eNSP。需要GUI时安装Python的pywin32和Pillow；需要Word报告时安装python-docx。实验输出使用独立工作区。
 
 ## 调用契约
 
-tools命令输出实际参数schema。新增ensp_build、ensp_scenarios、ensp_wait返回 {ok,data,error}，其中data为JSON字符串；原九个工具保留原返回格式。调用方不能假定全部响应结构相同。
+tools命令输出实际参数schema。融合层七个工具ensp_build、ensp_scenarios、ensp_wait、ensp_inspect、ensp_diagnose、ensp_lldp、ensp_services返回 {ok,data,error}，其中data为JSON字符串；原九个工具保留原返回格式。采集或验收失败时外层ok:false，data保留部分证据；LLDP差异及诊断发现使用data.status表达。
 
 设备批次先校验后执行，默认某设备失败就跳过后续设备。配置成功与保存成功必须分开判断，检查failure、skipped和saved.ok。超时可能已有部分配置生效，先读取状态再决定恢复。Ping必须读取统计和断言，不能仅看命令是否被接受。
 
@@ -87,12 +124,28 @@ npm test
 npm run test:fusion
 npm run check:plugin
 npm run test:package
+npm run check:release
 npm run audit:sources -- <ENSPLB目录> <YunoSeng目录> <lizi600jin目录>
 ```
 
 npm test执行MCP冒烟和Node测试，不代表实机验收。check:plugin检查环境、注册、包内容，不启动eNSP；报告默认写到系统临时目录的dsh-ensp-fusion/plugin-check.json，可用ENSP_CHECK_OUTPUT指定输出文件，需要报告目录写权限。test:package在临时目录打包、离线安装并验证CLI/MCP，依赖本机npm缓存。
 
 开发测试使用完整源码和锁文件。package.json的files清单只分发运行所需文件、文档、示例和测试夹具，不分发完整开发脚本、实验数据或node_modules。
+
+`check:release`离线核对版本、仓库内文档链接、忽略规则、候选Git文件和高置信度凭据特征，不推送、不创建标签、不启动设备。它不能替代人工审查与完整敏感信息扫描。贡献流程见[CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [更新日志](CHANGELOG.md) / [发布说明](docs/releases/1.1.0.zh-CN.md) | 全量变更与迁移 |
+| [部署手册](docs/DEPLOYMENT.zh-CN.md) | 环境、MCP、DSH、CLI与排错 |
+| [统一验收](docs/ACCEPTANCE-RUNNER.zh-CN.md) | 计划、证据、异常清理及恢复 |
+| [变更管理](docs/CHANGE-MANAGEMENT.zh-CN.md) | 预览、锁、日志与guard |
+| [已知问题](docs/KNOWN-ISSUES.zh-CN.md) / [验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md) | 已通过范围、失败项和未测项 |
+| [模块实现记录](docs/REMAINING-MODULES.zh-CN.md) / [可靠性修复](docs/RELIABILITY-HARDENING.zh-CN.md) | 实现细节及历史验证过程 |
+| [参考项目对比](docs/GRBJ-COMPARISON.zh-CN.md) / [源码分析](docs/ANALYSIS.zh-CN.md) | 来源分析与能力补齐 |
+| [GitHub准备](docs/GITHUB-RELEASE.zh-CN.md) | 检查、提交范围及发布顺序 |
 
 来源见 [NOTICE.md](NOTICE.md) 和 [源码分析](docs/ANALYSIS.zh-CN.md)。整体GPL-3.0-or-later，保留MIT及上游许可声明。修改工具契约应同步核查DSH/MCP/CLI入口、测试和示例。
 

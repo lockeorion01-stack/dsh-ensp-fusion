@@ -47,6 +47,60 @@ exec(compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec'), b.__dict__)
 
 
 class BridgeTests(unittest.TestCase):
+    def test_list_selection_by_native_label_rejects_missing_and_ambiguous_items(self):
+        gui = types.SimpleNamespace(GetClassName=Mock(return_value='ListBox'),
+            IsWindowVisible=Mock(return_value=True), GetWindowLong=Mock(return_value=0),
+            GetParent=Mock(return_value=11), GetDlgCtrlID=Mock(return_value=42),
+            SendMessage=Mock(side_effect=[2, 1, 1, 1, 0, 1]))
+        with patch.object(b, 'win32gui', gui), patch.object(b.win32con, 'GWL_STYLE', -16, create=True), patch.object(b.win32con, 'WM_COMMAND', 273, create=True):
+            self.assertTrue(b.select_list(12, text='HTTP')['confirmed'])
+            self.assertEqual(gui.SendMessage.call_args_list[1].args, (12, 0x01A2, -1, 'HTTP'))
+            gui.SendMessage.side_effect = [2, -1]
+            with self.assertRaisesRegex(ValueError, 'not found'):
+                b.select_list(12, text='HTTP')
+            gui.SendMessage.side_effect = [3, 1, 2]
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                b.select_list(12, text='HTTP')
+            gui.SendMessage.side_effect = [2]
+            with self.assertRaisesRegex(RuntimeError, 'expected layout'):
+                b.select_list(12, index=1, expected_count=3)
+
+    def test_list_selection_notifies_parent_and_confirms_without_keyboard(self):
+        gui = types.SimpleNamespace(GetClassName=Mock(return_value='ListBox'),
+            IsWindowVisible=Mock(return_value=True), GetWindowLong=Mock(return_value=0),
+            GetParent=Mock(return_value=11), GetDlgCtrlID=Mock(return_value=42),
+            SendMessage=Mock(side_effect=[3, 2, 0, 2]))
+        with patch.object(b, 'win32gui', gui), patch.object(b.win32con, 'GWL_STYLE', -16, create=True), patch.object(b.win32con, 'WM_COMMAND', 273, create=True), patch.object(b, 'press_key') as key:
+            self.assertTrue(b.select_list(12, 2)['confirmed'])
+            self.assertEqual(gui.SendMessage.call_args_list[2].args, (11, 273, (1 << 16) | 42, 12))
+            key.assert_not_called()
+            gui.SendMessage.reset_mock(side_effect=True)
+            gui.SendMessage.side_effect = [3, 2, 0, 1]
+            with self.assertRaisesRegex(RuntimeError, 'changed'):
+                b.select_list(12, 2)
+            gui.GetWindowLong.return_value = 0x0800
+            gui.SendMessage.side_effect = None
+            gui.SendMessage.return_value = 3
+            with self.assertRaisesRegex(RuntimeError, 'multi-select'):
+                b.select_list(12, 1)
+
+    def test_tab_selection_uses_queried_rect_and_checks_native_selection(self):
+        replies = [3, 0, 2]
+        with patch.object(b, 'tab_message', side_effect=replies), patch.object(b, 'tab_item_rect', return_value=[120, 0, 240, 24]), patch.object(b, 'window_dpi', return_value={'context': None, 'dpi_scale': 1.5}), patch.object(b.win32gui, 'IsWindowVisible', return_value=True, create=True), patch.object(b.win32gui, 'GetClientRect', return_value=[0, 0, 300, 200], create=True), patch.object(b, 'post_click') as click:
+            result = b.select_tab(12, 2)
+            self.assertTrue(result['confirmed'])
+            click.assert_called_once_with(12, 270, 18, client=True)
+
+    def test_tab_selection_refuses_out_of_range_and_invalid_geometry(self):
+        with patch.object(b, 'tab_message', return_value=2), patch.object(b, 'post_click') as click:
+            with self.assertRaises(ValueError):
+                b.select_tab(12, 2)
+            click.assert_not_called()
+        with patch.object(b, 'tab_message', return_value=3), patch.object(b, 'tab_item_rect', return_value=[-10, 0, 240, 24]), patch.object(b, 'window_dpi', return_value={'context': None, 'dpi_scale': 1.5}), patch.object(b.win32gui, 'IsWindowVisible', return_value=True, create=True), patch.object(b.win32gui, 'GetClientRect', return_value=[0, 0, 300, 200], create=True), patch.object(b, 'post_click') as click:
+            with self.assertRaises(RuntimeError):
+                b.select_tab(12, 2)
+            click.assert_not_called()
+
     def test_button_click_posts_without_waiting_for_modal_dialog(self):
         with patch.object(b.win32gui, 'PostMessage', create=True) as post, patch.object(b.win32gui, 'SendMessage', create=True) as send, patch.object(b.win32con, 'BM_CLICK', 245, create=True):
             self.assertTrue(b.click_button(12)['posted'])
@@ -346,6 +400,23 @@ class BridgeTests(unittest.TestCase):
                 b.activate(11, method='click', settle=0)
             click.assert_not_called()
 
+    def test_keyboard_start_has_no_mouse_input_and_checks_foreground(self):
+        with patch.object(b, 'owned_dialogs', return_value=[]), \
+             patch.object(b, 'activate', return_value={'activated': True}), \
+             patch.object(b, 'window_info', return_value={'rect': [0,0,100,100]}), \
+             patch.object(b, '_is_foreground', return_value=True), \
+             patch.object(b, 'press_key') as key, patch.object(b, 'click_at') as click:
+            self.assertEqual(b.start_devices(11)['method'], 'keyboard')
+            key.assert_called_once_with('a', ['ctrl', 'alt'])
+            click.assert_not_called()
+        with patch.object(b, 'owned_dialogs', return_value=[]), \
+             patch.object(b, 'activate', return_value={'activated': True}), \
+             patch.object(b, 'window_info', return_value={'rect': [0,0,100,100]}), \
+             patch.object(b, '_is_foreground', return_value=False), patch.object(b, 'press_key') as key:
+            with self.assertRaisesRegex(RuntimeError, 'changed'):
+                b.start_devices(11)
+            key.assert_not_called()
+
     def test_geometry_change_prevents_selection_keys(self):
         with patch.object(b, 'cursor_pos'), patch.object(b, 'guard_foreground'), \
              patch.object(b, 'owned_dialogs', return_value=[]), \
@@ -446,6 +517,23 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(exe.call_count, 3)  # one query per PID in each call
             paths[42] = r'C:\Other\reused-pid.exe'
             self.assertEqual(b.device_windows(), [])  # no cross-call PID cache
+
+    def test_service_process_windows_require_matching_install_root(self):
+        rows = [
+            {'hwnd': 1, 'pid': 42, 'cls': 'Afx:main', 'title': 'topology'},
+            {'hwnd': 2, 'pid': 43, 'cls': '#32770', 'title': 'SERVER'},
+            {'hwnd': 3, 'pid': 44, 'cls': '#32770', 'title': 'CLIENT'},
+            {'hwnd': 4, 'pid': 45, 'cls': '#32770', 'title': 'SERVER'},
+        ]
+        paths = {42: r'C:\Huawei\eNSP_Client.exe',
+                 43: r'C:\Huawei\plugin\pc_client_server\eNSP_PCServer.exe',
+                 44: r'C:\Huawei\plugin\pc_client_server\eNSP_PCClient.exe',
+                 45: r'C:\Other\eNSP_PCServer.exe'}
+        with patch.object(b, 'enum_windows', return_value=rows), \
+             patch.object(b, 'process_executable', side_effect=paths.get):
+            found = b.device_windows()
+            self.assertEqual([w['hwnd'] for w in found], [2, 3])
+            self.assertEqual([w['ensp_pid'] for w in found], [42, 42])
 
     def test_process_query_uses_limited_access_and_always_closes_handle(self):
         def query(handle, flags, buffer, size):

@@ -21,7 +21,7 @@
  * @module dsh-ensp/topology
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { readTopo, writeTopo } from '../../../../lib/topo.js'
 
 /**
  * Must stay in sync with build.mjs `MODEL_SPECS` (duplicated to avoid a circular
@@ -37,9 +37,10 @@ const MODEL_SPECS = {
   USG5500: { groups: [['Ethernet', 'GE', 9, 0]] },
   USG6000V: { groups: [['Ethernet', 'GE', 1, 0, 'GigabitEthernet0/0/'], ['Ethernet', 'GE', 7, 0, 'GigabitEthernet1/0/']] },
   AC6005: { groups: [['Ethernet', 'GE', 8, 1]] },
-  // PC/Server declare GE in the file but expose Ethernet0/0/1 on the CLI.
+  // Simulated PC declares GE; native service Client/Server declare Ethernet.
   PC: { groups: [['Ethernet', 'GE', 1, 1, 'Ethernet0/0/']] },
-  Server: { groups: [['Ethernet', 'GE', 1, 1, 'Ethernet0/0/']] },
+  Server: { groups: [['Ethernet', 'Ethernet', 1, 1, 'Ethernet0/0/']] },
+  Client: { groups: [['Ethernet', 'Ethernet', 1, 1, 'Ethernet0/0/']] },
   Cloud: { groups: [['Ethernet', 'Ethernet', 3, 0]] },
 }
 
@@ -80,6 +81,7 @@ export const MODELS = {
   AC6005: { ports: [{ prefix: 'GigabitEthernet0/0/', count: 8, base: 1 }], comPort: true },
   PC: { ports: [{ prefix: 'Ethernet0/0/', count: 1, base: 1 }], comPort: false },
   Server: { ports: [{ prefix: 'Ethernet0/0/', count: 1, base: 1 }], comPort: false },
+  Client: { ports: [{ prefix: 'Ethernet0/0/', count: 1, base: 1 }], comPort: false },
   Cloud: { ports: [{ prefix: 'Ethernet0/0/', count: 32, base: 0 }], comPort: false },
 }
 
@@ -213,15 +215,14 @@ export function parseTopology(xml) {
 /**
  * Read and parse a `.topo` file.
  *
- * eNSP writes a UTF-8 file while its XML declaration says `encoding="UNICODE"`,
- * so we ignore the declaration and decode as UTF-8, stripping a BOM if present.
+ * Decode native GB18030 and Unicode bytes independently of the legacy XML
+ * declaration, which can say UNICODE for an ANSI file.
  *
  * @param {string} file
  */
 export async function readTopology(file) {
-  const raw = await readFile(file)
-  const text = raw.toString('utf8').replace(/^\uFEFF/, '')
-  return { ...parseTopology(text), file }
+  const { text, encoding } = await readTopo(file)
+  return { ...parseTopology(text), file, encoding }
 }
 
 /**
@@ -311,7 +312,8 @@ export function serialiseTopology(topo) {
  * @param {object} topo
  */
 export async function writeTopology(file, topo) {
-  await writeFile(file, serialiseTopology(topo), 'utf8')
+  const text = serialiseTopology(topo)
+  await writeTopo(file, text, { encoding: topo.encoding ?? (/[^\x00-\x7f]/u.test(text) ? 'gb18030' : 'utf-8') })
   return file
 }
 

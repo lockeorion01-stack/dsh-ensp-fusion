@@ -85,7 +85,7 @@ test('topology names, IDs, and raw console ports are validated across all device
   const bad = [
     [fixture.replace('name="SW2"', 'name="sw1"'), /duplicate topology device name/],
     [fixture.replace('id="2"', 'id="1"'), /duplicate topology device ID/],
-    [fixture.replace('name="SW2"', ''), /missing device/],
+    [fixture.replace('name="SW2"', ''), /topology device name must be a nonempty/],
     ...['-1', '65536', '2001x', '2.5', '', '0', '1e3'].map((port) => [fixture.replace('com_port="2002"', `com_port="${port}"`), /invalid com_port/]),
     [fixture.replace('com_port="2002"', 'com_port="2001"'), /duplicate com_port/],
     [fixture.replace('com_port="2002"', ''), /invalid com_port/],

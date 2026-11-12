@@ -5,7 +5,7 @@ import { createRegistry } from '../mcp/server.js'
 async function main() {
   const [command, ...rest] = process.argv.slice(2)
   if (!command || ['--help', '-h'].includes(command)) {
-    process.stdout.write('ensp-fusion tools\nensp-fusion call <tool> <args.json> [workspace]\nensp-fusion scenarios [keyword]\nMCP: ensp-fusion-mcp --workspace <dir>\nOffline lab plans: ensp-fusion-lab --help\n')
+    process.stdout.write('ensp-fusion tools\nensp-fusion call <tool> <args.json> [workspace]\nensp-fusion scenarios [keyword]\nMCP: ensp-fusion-mcp --workspace <dir>\nOffline lab plans: ensp-fusion-lab --help\nUnified acceptance: ensp-fusion-accept --help\nEnvironment: ensp-fusion-doctor --help\n')
     return
   }
   const registry = createRegistry({ workspace: command === 'call' ? rest[2] : process.cwd() })

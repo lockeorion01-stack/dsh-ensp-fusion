@@ -981,6 +981,21 @@ def relative_click(hwnd, point, double=False):
     return click_guarded(x, y, hwnd, double=double, hold=0.08, restore=True)
 
 
+def start_devices(hwnd):
+    """Start all devices using eNSP's native shortcut without pointer input."""
+    if owned_dialogs(hwnd):
+        raise RuntimeError("eNSP has an owned modal dialog; resolve it before GUI input")
+    activated = activate(hwnd, "setfg")
+    if not activated.get("activated"):
+        raise RuntimeError("eNSP could not be activated without mouse input")
+    before = window_info(hwnd)
+    time.sleep(0.12)
+    if not _is_foreground(hwnd) or owned_dialogs(hwnd) or before["rect"] != window_info(hwnd)["rect"]:
+        raise RuntimeError("eNSP focus, dialog or geometry changed before start shortcut")
+    press_key("a", ["ctrl", "alt"])
+    return {"method": "keyboard", "shortcut": "Ctrl+Alt+A", "requested": "start_all"}
+
+
 def control_devices(hwnd, toolbar):
     """One foreground transaction. Never send Ctrl+A after a failed click."""
     main = stable_main(hwnd)
@@ -1192,22 +1207,34 @@ def process_executable(pid):
         _close_handle(handle)
 
 
-def _ensp_owned_windows(cls_matches):
+def _ensp_owned_windows(cls_matches, include_pc_services=False):
     # Cache only for this enumeration: eNSP creates new processes per topology,
     # and Windows can reuse PIDs. Class names and titles do not identify eNSP.
     owned = {}
     rows = []
-    for w in enum_windows(None, True):
+    windows = enum_windows(None, True)
+    def image(pid):
+        if pid not in owned:
+            try:
+                owned[pid] = process_executable(pid) or ""
+            except OSError:
+                owned[pid] = ""
+        return owned[pid]
+    mains = [(w["pid"], ntpath.dirname(image(w["pid"]))) for w in windows
+             if include_pc_services and w["cls"].lower().startswith("afx:")
+             and ntpath.basename(image(w["pid"])).lower() == "ensp_client.exe"]
+    for w in windows:
         if not cls_matches(w["cls"]):
             continue
         pid = w["pid"]
-        if pid not in owned:
-            try:
-                owned[pid] = ntpath.basename(process_executable(pid) or "").lower() == "ensp_client.exe"
-            except OSError:
-                owned[pid] = False
-        if owned[pid]:
+        path = image(pid)
+        if ntpath.basename(path).lower() == "ensp_client.exe":
             rows.append(w)
+        elif include_pc_services and ntpath.basename(path).lower() in ("ensp_pcserver.exe", "ensp_pcclient.exe"):
+            owners = [owner for owner, root in mains if ntpath.normcase(ntpath.dirname(path)) ==
+                      ntpath.normcase(ntpath.join(root, "plugin", "pc_client_server"))]
+            if len(owners) == 1:
+                rows.append(dict(w, ensp_pid=owners[0]))
     return rows
 
 
@@ -1237,7 +1264,7 @@ def resolve_target(args):
 
 def device_windows():
     """eNSP device windows: consoles and property dialogs (#32770, titled by device)."""
-    return _ensp_owned_windows(lambda cls: cls == "#32770")
+    return _ensp_owned_windows(lambda cls: cls == "#32770", include_pc_services=True)
 
 
 def canvas_anchors(main_hwnd):
@@ -1341,7 +1368,140 @@ def free_ports(ports, wait=1.0):
     remaining = sorted(_port_owners(ports).keys())
     return {"killed": killed, "remaining": remaining}
 
+def tab_message(hwnd, message, wparam=0, lparam=0):
+    """Only used for the exact standard tab-control class, never eNSP skins."""
+    if win32gui.GetClassName(hwnd) != "SysTabControl32":
+        raise ValueError("tab operations require SysTabControl32")
+    result = ctypes.c_size_t()
+    send = user32.SendMessageTimeoutW
+    send.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t, ctypes.c_void_p,
+                     wt.UINT, wt.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    send.restype = ctypes.c_void_p
+    if not send(hwnd, message, wparam, lparam, 2, 500, ctypes.byref(result)):
+        raise RuntimeError("tab control message timed out or was refused")
+    return int(result.value)
+
+
+def tab_item_rect(hwnd, index):
+    # TCM_GETITEMRECT is a control message: the RECT must live in the target
+    # process. A local ctypes pointer is not marshalled across processes.
+    pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    open_process.restype = wt.HANDLE
+    allocate = kernel32.VirtualAllocEx
+    allocate.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, wt.DWORD, wt.DWORD]
+    allocate.restype = ctypes.c_void_p
+    read = kernel32.ReadProcessMemory
+    read.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    read.restype = wt.BOOL
+    free = kernel32.VirtualFreeEx
+    free.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, wt.DWORD]
+    free.restype = wt.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = [wt.HANDLE]
+    close.restype = wt.BOOL
+    process = open_process(0x38, False, pid)
+    if not process:
+        raise RuntimeError("cannot open tab owner for rectangle query")
+    remote = None
+    try:
+        remote = allocate(process, None, ctypes.sizeof(wt.RECT), 0x3000, 4)
+        if not remote or not tab_message(hwnd, 0x130A, index, remote):
+            raise RuntimeError("tab item rectangle unavailable")
+        rect, count = wt.RECT(), ctypes.c_size_t()
+        if not read(process, remote, ctypes.byref(rect), ctypes.sizeof(rect), ctypes.byref(count)) or count.value != ctypes.sizeof(rect):
+            raise RuntimeError("cannot read tab item rectangle")
+        return [rect.left, rect.top, rect.right, rect.bottom]
+    finally:
+        if remote:
+            free(process, remote, 0, 0x8000)
+        close(process)
+
+
+def select_list(hwnd, index=None, text=None, expected_count=None):
+    """Select a native single-select ListBox and notify its actual parent."""
+    if (index is None) == (text is None):
+        raise ValueError("list selector requires exactly one index or text")
+    if text is not None and (not isinstance(text, str) or not text.strip() or any(ord(c) < 32 for c in text)):
+        raise ValueError("list text must be a nonempty label")
+    if text is None and (not isinstance(index, int) or isinstance(index, bool)):
+        raise ValueError("list index must be an integer")
+    if win32gui.GetClassName(hwnd) != "ListBox" or not win32gui.IsWindowVisible(hwnd):
+        raise RuntimeError("list selector requires a visible ListBox")
+    count = win32gui.SendMessage(hwnd, 0x018B, 0, 0)  # LB_GETCOUNT
+    if expected_count is not None and (not isinstance(expected_count, int) or isinstance(expected_count, bool) or expected_count < 1):
+        raise ValueError("expected list count must be a positive integer")
+    if expected_count is not None and count != expected_count:
+        raise RuntimeError("list count differs from the expected layout")
+    style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+    if style & (0x0008 | 0x0800):  # LBS_MULTIPLESEL | LBS_EXTENDEDSEL
+        raise RuntimeError("multi-select lists are not supported")
+    if text is not None:
+        if style & (0x0010 | 0x0020) and not style & 0x0040:
+            raise RuntimeError("owner-drawn list without strings is not supported")
+        # LB_FINDSTRINGEXACT uses the native string table and wraps once.
+        # A second search rejects duplicate labels instead of selecting one.
+        index = win32gui.SendMessage(hwnd, 0x01A2, -1, text)
+        if index < 0 or index >= count:
+            raise ValueError("list label not found")
+        if win32gui.SendMessage(hwnd, 0x01A2, index, text) != index:
+            raise RuntimeError("list label is ambiguous")
+    if index < 0 or index >= count:
+        raise ValueError("list index outside current control")
+    parent = win32gui.GetParent(hwnd)
+    if not parent:
+        raise RuntimeError("list has no parent")
+    selected = win32gui.SendMessage(hwnd, 0x0186, index, 0)  # LB_SETCURSEL
+    if selected != index:
+        raise RuntimeError("list selection was not accepted")
+    control_id = win32gui.GetDlgCtrlID(hwnd)
+    # LBN_SELCHANGE is not automatically sent for LB_SETCURSEL.
+    win32gui.SendMessage(parent, win32con.WM_COMMAND,
+                         (1 << 16) | (control_id & 0xFFFF), hwnd)
+    confirmed = win32gui.SendMessage(hwnd, 0x0188, 0, 0) == index
+    if not confirmed:
+        raise RuntimeError("list selection changed during notification")
+    return {"selected": index, "count": count, "confirmed": True}
+
+
+def select_tab(hwnd, index):
+    if not isinstance(index, int) or isinstance(index, bool):
+        raise ValueError("tab index must be an integer")
+    count = tab_message(hwnd, 0x1304)
+    if index < 0 or index >= count:
+        raise ValueError("tab index outside current control")
+    if not win32gui.IsWindowVisible(hwnd):
+        raise RuntimeError("tab control must be visible")
+    rect = tab_item_rect(hwnd, index)
+    dpi = window_dpi(hwnd)
+    # TCM_GETITEMRECT writes target-logical coordinates into remote memory.
+    # PostMessage from our per-monitor aware sender is DPI translated by
+    # Windows, so its client coordinates must be in the sender's physical
+    # space. Use the target context for bounds validation, then scale once.
+    with _dpi_context(dpi["context"]):
+        client = win32gui.GetClientRect(hwnd)
+    if not (client[0] <= rect[0] < rect[2] <= client[2] and client[1] <= rect[1] < rect[3] <= client[3]):
+        raise RuntimeError("tab rectangle outside visible client area")
+    if tab_message(hwnd, 0x130B) != index:
+        post_click(hwnd, round((rect[0] + rect[2]) / 2 * dpi["dpi_scale"]),
+                   round((rect[1] + rect[3]) / 2 * dpi["dpi_scale"]), client=True)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if tab_message(hwnd, 0x130B) == index:
+            return {"selected": index, "count": count, "rect": rect,
+                    "dpi_scale": dpi["dpi_scale"], "confirmed": True}
+        time.sleep(0.02)
+    return {"ok": False, "selected": tab_message(hwnd, 0x130B), "confirmed": False,
+            "rect": rect, "client": list(client), "dpi": dpi,
+            "error": "tab selection was not confirmed"}
+
+
 def dispatch(op, args):
+    if op == "select_tab":
+        return select_tab(resolve_target(args), args["index"])
+    if op == "select_list":
+        return select_list(resolve_target(args), args.get("index"), args.get("text"), args.get("expected_count"))
     if op == "ping":
         try:
             cursor = cursor_pos()
@@ -1441,6 +1601,8 @@ def dispatch(op, args):
         return close_project(resolve_target(args), args.get("save", "ask"), args.get("timeout", 8), args.get("dialog_hwnd"))
     if op == "device_control":
         return control_devices(resolve_target(args), args["toolbar"])
+    if op == "start_devices":
+        return start_devices(resolve_target(args))
     if op == "normalize_canvas":
         hwnd = resolve_target(args)
         result = relative_click(hwnd, args.get("toolbar", [624, 56]))

@@ -56,6 +56,18 @@ async function invoke(server, name, args) {
   return { response, value }
 }
 
+test('configuration responses, transcripts and previews redact secrets after assertions', async t => {
+  const device = await fixture(t, () => 'local-user admin password cipher config-only-secret')
+  const root = await workspace(t), server = createMcpServer({ workspace: root, quiet: true })
+  const result = await invoke(server, 'ensp_cli', { port: device.port, commands: ['display current-configuration'], expect: ['config-only-secret'], save: false, output_file: 'transcript.txt' })
+  assert.equal(result.value.ok, true)
+  assert.doesNotMatch(JSON.stringify(result.value), /config-only-secret/)
+  assert.doesNotMatch(await readFile(join(root, 'transcript.txt'), 'utf8'), /config-only-secret/)
+  const preview = await invoke(server, 'ensp_cli', { port: device.port, commands: ['local-user admin password cipher preview-only-secret'], dry_run: true })
+  assert.doesNotMatch(JSON.stringify(preview.value), /preview-only-secret/)
+  assert.equal(device.commands.length, 1)
+})
+
 test('reject invalid batch before connecting any device', async (t) => {
   const device = await fixture(t)
   const server = createMcpServer({ workspace: await workspace(t), quiet: true })
@@ -65,6 +77,16 @@ test('reject invalid batch before connecting any device', async (t) => {
   ] })
   assert.equal(response.result.isError, true)
   assert.equal(device.connections, 0)
+})
+test('LLDP confirmation option is validated for every device before connecting', async t => {
+  const device=await fixture(t)
+  const server=createMcpServer({workspace:await workspace(t),quiet:true})
+  const {response}=await invoke(server,'ensp_cli',{devices:[
+    {port:device.port,commands:['display version']},
+    {port:2002,commands:['undo lldp enable'],confirm_lldp_disable:'yes'},
+  ]})
+  assert.equal(response.result.isError,true)
+  assert.equal(device.connections,0)
 })
 
 test('assertions align with user commands when system-view is inserted', async (t) => {

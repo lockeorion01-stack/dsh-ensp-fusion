@@ -69,6 +69,42 @@ async function fixture(t, script, options = {}) {
   return { session, seen, negotiations }
 }
 
+test('durable progress hook failure before sending prevents any planned command', async t => {
+  const { session } = await fixture(t, [['', '<R1>']])
+  await session.open()
+  await assert.rejects(session.run(['sysname R2'], { beforeCommand() { throw new Error('journal write failed') } }), /journal write failed/)
+})
+
+test('progress hook failure after execution stops the tail and retains execution evidence', async t => {
+  const { session } = await fixture(t, [['', '<R1>'], ['display clock', '12:00\r\n<R1>']])
+  await session.open()
+  await assert.rejects(session.run(['display clock', 'sysname R2'], { afterCommand() { throw new Error('journal write failed') } }), /journal write failed/)
+  assert.equal(session.log.at(-1).command, 'display clock')
+  assert.equal(session.log.at(-1).ok, true)
+})
+
+test('known LLDP warning declines by default and leaves console usable', async t => {
+  const {session,seen}=await fixture(t,[['','[R1]'],['undo lldp enable','Warning: This command will delete the configurations of LLDP on all the ports. Continue?[Y/N]'],['n','[R1]'],['display clock','12:00\r\n[R1]']])
+  await session.open()
+  const r=await session.command('undo lldp enable')
+  assert.equal(r.error.kind,'confirmation_required')
+  assert.equal((await session.command('display clock')).ok,true)
+  assert.ok(!seen.includes('y'))
+})
+test('explicit LLDP confirmation answers the exact warning and preserves transcript', async t => {
+  const {session}=await fixture(t,[['','[R1]'],['undo lldp enable','Warning: This command will delete the configurations of LLDP on all the ports. Continue?[Y/N]'],['y','Info: Global LLDP is disabled successfully.\r\n[R1]']])
+  await session.open()
+  const r=await session.run(['undo lldp enable'],{confirmLldpDisable:true})
+  assert.equal(r.ok,true)
+  assert.match(r.results[0].output,/Continue\?\[Y\/N\]/u)
+  assert.match(r.results[0].output,/disabled successfully/u)
+})
+test('explicit LLDP option never confirms an unrelated question', async t => {
+  const {session}=await fixture(t,[['','[R1]'],['undo lldp enable','Delete unrelated files? [Y/N]:']])
+  await session.open()
+  await assert.rejects(session.command('undo lldp enable',{confirmLldpDisable:true}),e=>e.kind==='confirmation_required')
+})
+
 test('HRP prefix and native dated syslogs preserve prompt completion',async t=>{
   const {session}=await fixture(t,[['','HRP_M<FW-01>'],['system-view','system-view\r\nHRP_M[FW-01]'],['display clock','display clock\r\n13:00\r\nHRP_M[FW-01]\r\nNov 11 2026 13:00:00-08:00 FW-01 DS/4/DATASYNC_CFGCHANGE:OID test']]);
   assert.equal((await session.open()).prompt,'<FW-01>');
@@ -202,6 +238,23 @@ test('paging preserves Unicode text and sends one space per marker', async (t) =
   const record = await session.command('display current-configuration')
   for (const text of ['配置一', '配置二', '配置三']) assert.ok(record.output.includes(text))
   assert.ok(!record.output.includes('More'))
+})
+
+test('paging continues when asynchronous syslogs follow the More marker', async (t) => {
+  const { session, seen } = await fixture(t, [
+    ['', '<R1>'],
+    ['display current-configuration', 'display current-configuration\r\n#\r\n sysname R1\r\n---- More ----\r\nNov 12 2026 00:01:48-08:00 R1 DS/4/DATASYNC_CFGCHANGE:OID changed\r\n%%01PHY/1/PHY(l)[7]: port down'],
+    [' ', '\r\ninterface GigabitEthernet0/0/2\r\n shutdown\r\nreturn\r\n<R1>'],
+    ['display clock', 'display clock\r\n12:00\r\n<R1>'],
+  ], { commandTimeoutMs: 500 })
+  await session.open()
+  const config = await session.command('display current-configuration')
+  assert.match(config.output, /shutdown/u)
+  assert.match(config.output, /DATASYNC_CFGCHANGE/u)
+  assert.match(config.output, /port down/u)
+  assert.doesNotMatch(config.output, /---- More ----/u)
+  assert.equal(seen.filter(line => line === ' ').length, 1)
+  assert.equal((await session.command('display clock')).output, '12:00')
 })
 
 test('syslog-redrawn prompt inside a paged configuration does not end the command', async (t) => {

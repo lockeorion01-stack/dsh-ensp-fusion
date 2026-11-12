@@ -12,13 +12,14 @@
  * | `edit_left` / `edit_top` | `cx + 27` / `cy + 54` |
  * | attribute order | `id name model settings com_port bootmode cx cy edit_left edit_top` |
  * | switch interfaces | one slot, `interfacename="GE"`, index base 1 |
- * | PC / Server interfaces | `interfacename="Ethernet"`, index base 1 |
+ * | simulated PC interfaces | `interfacename="GE"`, index base 1 |
+ * | native Client / Server interfaces | `interfacename="Ethernet"`, index base 1 |
  * | router / firewall interfaces | `interfacename="GE"`, index base 0 |
  * | cable anchors | on the icon's bounding box: `x-16.2` / `x+70.2`, `y-16.2` / `y+70.2` |
  *
  * Two mistakes cost real debugging time and are called out in the code:
- * declaring PC interfaces as `GE` (eNSP silently renders an empty canvas) and
- * omitting `system_mac` handling (the attribute is absent from native files).
+ * mixing native service endpoint declarations with simulated PC declarations,
+ * and adding `system_mac` where native files omit that attribute.
  *
  * @module dsh-ensp/build
  */
@@ -73,7 +74,8 @@ export const MODEL_SPECS = {
   // Declares `interfacename="GE"` but the CLI port is Ethernet0/0/1 — eNSP's file
   // vocabulary and VRP's vocabulary differ here, so the CLI family is explicit.
   PC: { groups: [['Ethernet', 'GE', 1, 1, 'Ethernet0/0/']], base: 1, vrp: 'Ethernet0/0/', console: false },
-  Server: { groups: [['Ethernet', 'GE', 1, 1, 'Ethernet0/0/']], base: 1, vrp: 'Ethernet0/0/', console: false },
+  Server: { groups: [['Ethernet', 'Ethernet', 1, 1, 'Ethernet0/0/']], base: 1, vrp: 'Ethernet0/0/', console: false },
+  Client: { groups: [['Ethernet', 'Ethernet', 1, 1, 'Ethernet0/0/']], base: 1, vrp: 'Ethernet0/0/', console: false },
   Cloud: { groups: [['Ethernet', 'Ethernet', 3, 0]], base: 0, vrp: 'Ethernet0/0/', console: false },
 }
 
@@ -121,20 +123,26 @@ function cliPrefixFor(enspPrefix) {
 export const ICON = { w: 86, h: 86, left: -16.2, right: 70.2, top: -16.2, bottom: 70.2 }
 
 /**
- * `settings` blob eNSP writes for a simulated PC. Empty for every other model.
+ * `settings` blob eNSP writes for a simulated PC. Native service endpoints use
+ * serviceEndpointSettings below.
  * Without it eNSP still shows the PC but with no address, which breaks the
  * "ping between the two PCs" step.
  */
-function pcSettings({ ip = '192.168.10.1', mask = '255.255.255.0', gateway = '192.168.10.254', mac } = {}) {
+function pcSettings({ ip = '192.168.10.1', mask = '255.255.255.0', gateway = '192.168.10.254', dns = '0.0.0.0', mac } = {}) {
   const macAddr = mac ?? `54-89-98-${Array.from({ length: 3 }, () =>
     Math.floor(Math.random() * 256).toString(16).toUpperCase().padStart(2, '0')).join('-')}`
   return (
     ` -simpc_ip ${ip}  -simpc_mask ${mask}  -simpc_gateway ${gateway}  -simpc_mac ${macAddr}` +
     '  -simpc_mc_dstip 0.0.0.0  -simpc_mc_dstmac 00-00-00-00-00-00' +
-    '  -simpc_dns1 0.0.0.0  -simpc_dns2 0.0.0.0' +
+    `  -simpc_dns1 ${dns}  -simpc_dns2 0.0.0.0` +
     '  -simpc_ipv6 ::  -simpc_prefix 128  -simpc_gatewayv6 ::' +
     '  -simpc_dhcp_state 0  -simpc_dhcpv6_state 0  -simpc_dns_auto_state 0 '
   )
+}
+
+function serviceEndpointSettings({ip='192.168.10.1',mask='255.255.255.0',gateway='192.168.10.254',dns='0.0.0.0'}={}) {
+  const mac=`54-89-98-${Array.from({length:3},()=>Math.floor(Math.random()*256).toString(16).padStart(2,'0')).join('-')}`
+  return `-domain 0 -eth ${mac} -ipaddr ${ip} -ipmask ${mask} -gateway ${gateway} -ipv6addr :: -ipv6gateway :: -prefixlen 64 -ipv4dns ${dns} -ipv6dns :: -dnslist NULL`
 }
 
 /**
@@ -173,7 +181,7 @@ export class TopologyBuilder {
       id: randomUUID(),
       name,
       model,
-      settings: model === 'PC' ? pcSettings(options.pc) : '',
+      settings: model === 'PC' ? pcSettings(options.pc) : ['Client','Server'].includes(model) ? serviceEndpointSettings(options.pc) : '',
       comPort,
       bootmode: options.bootmode ?? 1,
       x: options.x ?? 100,

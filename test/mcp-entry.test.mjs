@@ -12,7 +12,7 @@ test('MCP entry accepts separate GUI and document Python paths', () => {
   ]) {
     const r = run([...args,'--version'])
     assert.equal(r.status,0,r.stderr)
-    assert.equal(r.stdout.trim(),'1.0.0')
+    assert.equal(r.stdout.trim(),'1.1.0')
   }
   const help = run(['--help'])
   assert.match(help.stdout,/--docs-python/)

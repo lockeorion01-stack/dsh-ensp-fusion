@@ -1,3 +1,4 @@
+import { createDeviceRunner, isReadOnlyCommand, matchExpect } from './lib/device-execution.js'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -12,11 +13,13 @@ import Schema from '@deepseek-ai/schemastery'
 import { Bridge, runProcess, sleep } from './lib/bridge-client.js'
 import { VrpSession, probePort } from './lib/cli.js'
 import { prepareCliEntries } from './lib/cli-plan.js'
+import { readRecoveryPlan, listChangeJournals } from './lib/change-journal.js'
+import { createRedactor, credentialValues, redactValue } from './lib/redaction.js'
 import { waitDevicesReady } from './lib/device-ready.js'
 import { validateLabPlan, runLabTest, renderLabReports } from './lib/lab-test.js'
 import {
   describeDevices, parseTopo, readTopo, renameDevice, renumberComPorts,
-  setComPort, setDeviceIpv4, suggestNames, writeTopo, validateTopoConsolePorts,
+  setComPort, setDeviceIpv4, suggestNames, writeTopo, validateTopoConsolePorts, validateNativeEndpointSettings,
 } from './lib/topo.js'
 
 export const name = 'ensp-automation'
@@ -94,12 +97,7 @@ ENSPLB 增强：ensp_cli 批次整体预校验后顺序执行，失败默认跳�
  * from these never needs ``save``; anything else is treated as a configuration
  * change and saved automatically, because lab work must survive a restart.
  */
-const READ_ONLY_COMMAND = /^(display\b|dis\s|ping\b|tracert\b|dir\b|more\b|save\b|screen-length\b|system-view\b|quit\b|return\b|undo\s+terminal\b|terminal\b|reset\s+counters\b|refresh\b)/iu
 
-function isReadOnlyCommand(line) {
-  const text = String(line ?? '').trim()
-  return text === '' || READ_ONLY_COMMAND.test(text)
-}
 
 function readSkillDefinition(path) {
   const raw = readFileSync(path, 'utf8')
@@ -287,7 +285,7 @@ async function consoleWindows(bridge, title) {
   if (payload.ok === false) throw new Error(payload.error ?? 'eNSP discovery failed')
   const mains = payload.windows ?? []
   if (mains.length > 1) throw new Error('multiple eNSP instances; close unrelated instances or use an explicit hwnd')
-  return (payload.devices ?? []).filter(w => mains.some(main => main.pid === w.pid)
+  return (payload.devices ?? []).filter(w => mains.some(main => main.pid === (w.ensp_pid ?? w.pid))
     && (w.title ?? '').toLowerCase() === title.toLowerCase())
 }
 
@@ -393,18 +391,6 @@ async function captureWindow(spec, { devices, bridge, config, exec }) {
  * slashes is a regular expression; anything else is a case-insensitive substring,
  * which is what lab verification actually needs ("2.2.10.10/32", "destination-nat").
  */
-function matchExpect(output, pattern) {
-  const text = String(output ?? '')
-  const slash = /^\/(.*)\/([a-z]*)$/u.exec(pattern)
-  if (slash) {
-    try {
-      return new RegExp(slash[1], slash[2] || 'i').test(text)
-    } catch (error) {
-      return false
-    }
-  }
-  return text.toLowerCase().includes(pattern.toLowerCase())
-}
 
 /**
  * Resolve the teacher's .docx. Chinese file names drift by a space or a full-width
@@ -464,188 +450,7 @@ async function fileDigest(path) {
  * Run one command batch against one device. Used by both the single-device and
  * the devices:[...] form of ensp_cli, so several devices cost one tool call.
  */
-async function runOnDevice(entry, { devices, exec, config, bridge, echoArgs }) {
-  const notes = []
-  const deviceName = entry.device
-  let port = entry.port
-  if (port !== undefined && port !== null && port !== '' && Number(port) <= 0) {
-    throw new Error(`port 必须是正整数（收到 ${JSON.stringify(port)}）；不指定端口时用 device + topology_path 自动解析。`)
-  }
-  if (!port) {
-    if (!deviceName || !devices) throw new Error('provide port, or device + topology_path')
-    if (String(deviceName).includes(',') || String(deviceName).includes('，')) {
-      throw new Error(`device 只接受一个设备名（收到“${deviceName}”）；要给多台设备下发，请用 devices:[{device, commands}, …]。`)
-    }
-    const device = devices.find((item) => item.name.toLowerCase() === String(deviceName).toLowerCase())
-    if (!device) throw new Error(`device "${deviceName}" is not in the topology`)
-    if (!device.comPort) throw new Error(`device "${deviceName}" has no console port (it never started)`)
-    port = device.comPort
-  }
-  const rawCommands = Array.isArray(entry.commands) ? entry.commands : []
-  const expectList = Array.isArray(entry.expect) ? entry.expect : []
-  const specs = rawCommands.map((item, index) => (typeof item === 'string'
-    ? { cmd: item, expect: expectList[index] || null }
-    : { cmd: String(item?.cmd ?? ''), expect: item?.expect ?? expectList[index] ?? null }))
-    .filter((spec) => spec.cmd.length > 0)
-  const commands = specs.map((spec) => spec.cmd)
-  const session = new VrpSession({
-    port,
-    username: entry.username,
-    password: entry.password,
-    passwords: entry.passwords,
-    newPassword: entry.new_password,
-    commandTimeoutMs: entry.command_timeout_ms,
-  })
-  let prompt = ''
-  let results = []
-  let saved
-  let checks = []
-  let ok = true
-  let failure
-  let skipped = []
-  let setupResults = []
-  let phase = 'connect'
-  let saveAttempted = false
-  try {
-    const opened = await session.open().catch((error) => {
-      if (/authentication failed|wrong password/iu.test(error.message)) {
-        throw new Error(`${error.message}｜口令只用题目或用户给出的值（常见 admin/Admin@123，改过密的机器是 Huawei@123），不要猜变体；也可以先查 工作区\笔记 里的历史配置，或直接问用户。`)
-      }
-      throw error
-    })
-    prompt = opened.prompt
-    phase = 'commands'
-    const ran = await session.run(commands, { systemView: entry.system_view === true })
-    prompt = ran.prompt
-    results = ran.results
-    setupResults = ran.setupResults ?? []
-    failure = ran.failure ?? undefined
-    skipped = ran.skipped ?? []
-    checks = []
-    for (let index = 0; index < specs.length; index += 1) {
-      const spec = specs[index]
-      if (!spec.expect) continue
-      const result = results[index]
-      const output = result?.output ?? ''
-      const patterns = (Array.isArray(spec.expect) ? spec.expect : [spec.expect])
-        .flat()
-        .filter((item) => item !== null && item !== undefined && String(item).length > 0)
-      const missing = patterns.filter((pattern) => !matchExpect(output, String(pattern)))
-      checks.push({ command: spec.cmd, pass: Boolean(result) && result.ok !== false && missing.length === 0, missing,
-        status: !result ? 'SKIP' : (result.ok === false ? 'ERROR' : (missing.length ? 'FAIL' : 'PASS')) })
-    }
-    ok = ran.ok !== false && checks.every((check) => check.pass)
-    const mutating = commands.some((line) => !isReadOnlyCommand(String(line)))
-    const wantSave = entry.save === false ? false : (entry.save === true ? true : mutating)
-    const explicitSave = /^save$/iu.test(commands.at(-1) ?? '') && results.at(-1)?.ok === true
-    if (explicitSave && ok) {
-      saved = { performed: true, ok: true, output: results.at(-1).output }
-    } else if (wantSave && ok) {
-      phase = 'save'
-      saveAttempted = true
-      const done = await session.save()
-      prompt = done.prompt
-      results = [...results, ...done.results]
-      const last = done.results[done.results.length - 1] ?? {}
-      const saveOk = done.ok !== false && /successfully|had been saved|已保存|保存成功/iu.test(last.output ?? '')
-      saved = { performed: true, ok: saveOk, output: last.output ?? '' }
-      ok = ok && saveOk
-      if (!saveOk) notes.push(`${deviceName}: 保存结果未确认，请检查 display saved-configuration 或 dir。`)
-    } else {
-      saved = { performed: false, reason: !ok ? 'batch-failed' : (entry.save === false ? 'disabled-by-args' : 'read-only batch') }
-    }
-  } catch (error) {
-    ok = false
-    failure = { phase, command: phase === 'save' ? 'save' : null, message: error.message, output: error.output ?? '', outcome: 'unconfirmed' }
-    saved = { performed: saveAttempted, ok: false, output: error.output ?? '', reason: 'failed-or-unconfirmed' }
-    notes.push(error.message)
-    if (!results.length) skipped = [...commands]
-  } finally {
-    session.close()
-  }
-  if (!ok && commands.some((line) => !isReadOnlyCommand(line))) notes.push('部分配置可能已生效；失败不会自动回滚，请先检查设备状态再重试。')
-
-  let echo
-  let screenshot
-  let artifactError
-  if (ok && echoArgs && echoArgs.echo_to_window) {
-    try {
-      if (!deviceName) throw new Error('echo_to_window needs device so the window can be found')
-      if (!echoArgs.allow_cursor_takeover) {
-        notes.push('回显需要打开设备窗口（会短暂接管鼠标并还原）。')
-      }
-      const opened = await ensureDeviceWindow(bridge, config, devices, deviceName, { settle: 1.1 })
-      if (!opened.open) {
-        throw new Error(opened.needsTopology
-          ? `设备窗口「${deviceName}」没有显示：回显需要 topology_path 才能双击图标打开它。`
-          : `设备窗口「${deviceName}」打不开（试过 ${opened.tried} 个图标位置）。`)
-      }
-      // Real keystrokes, guarded: refuse rather than leak them into another app.
-      //
-      // The line must end with "\n": bridge type_text maps "\n" to VK_RETURN and
-      // deliberately skips "\r", so a "\r" terminator types the command but never
-      // submits it — the text then sits in the input buffer and the screenshot
-      // shows no output at all.
-      // A device console that idled for a while logs out and shows
-      // "press any key to log on" — the first keystroke only wakes it. Activate the
-      // window and send a bare Enter first, otherwise the first command is eaten.
-      const steps = [
-        { op: 'activate', title: deviceName },
-        { op: 'safetype', title: deviceName, text: '\n', per_char: 0.02 },
-        { op: 'sleep', t: 0.5 },
-      ]
-      for (const line of commands) {
-        // 0.02 s/char drops the odd space on slower consoles (AR); 0.05 is safe.
-        steps.push({ op: 'safetype', title: deviceName, text: `${line}\n`, per_char: 0.05 })
-        steps.push({ op: 'sleep', t: Number(echoArgs.echo_gap_ms ?? 900) / 1000 })
-      }
-      steps.push({ op: 'sleep', t: Number(echoArgs.echo_settle_ms ?? 1800) / 1000 })
-      if (echoArgs.screenshot_out) {
-        const out = await resolveWorkspacePath(echoArgs.screenshot_out, exec, config, { kind: 'screenshot_out' })
-        await prepareOutput(out, true, 'screenshot_out')
-        // Re-activate right before the capture: an occluded console window keeps a
-        // stale device context and the PNG then shows the previous screen.
-        steps.push({ op: 'activate', title: deviceName })
-        steps.push({ op: 'sleep', t: 0.2 })
-        steps.push({ op: 'shot', title: deviceName, out })
-        screenshot = out
-      }
-      const echoed = await bridge.steps(steps)
-      const failures = echoed.steps.filter((step) => !step.ok)
-      echo = {
-        window: opened.method,
-        typed: echoed.steps.filter((step) => step.op === 'safetype' && step.ok).length,
-        reexecutes: true,
-      }
-      if (failures.length > 0) {
-        ok = false
-        artifactError = { phase: 'echo', message: failures[0].error }
-        notes.push(`回显失败 ${failures.length} 步：${failures[0].error}`)
-      }
-    } catch (error) {
-      ok = false
-      artifactError = { phase: 'echo', message: error.message }
-      notes.push(`GUI evidence failed; console results are retained: ${error.message}`)
-    }
-  }
-
-  let transcript
-  if (entry.output_file) {
-    try {
-      const out = await resolveWorkspacePath(entry.output_file, exec, config, { kind: 'output_file' })
-      await prepareOutput(out, true, 'output_file')
-      const body = results.map((row) => `### ${row.command}\n${row.output ?? ''}`).join('\n\n')
-      await writeFile(out, `${body}\n`, 'utf8')
-      transcript = out
-    } catch (error) {
-      ok = false
-      artifactError = { phase: 'transcript', message: error.message }
-      notes.push(`Transcript write failed; device execution results are retained: ${error.message}`)
-    }
-  }
-
-  return { device: deviceName, port, prompt, results, setupResults, failure, skipped, artifactError, echo, screenshot, transcript, saved, checks, ok, notes }
-}
+const runOnDevice = createDeviceRunner({ resolveWorkspacePath, prepareOutput, ensureDeviceWindow })
 
 function statSyncSafe(path) {
   try {
@@ -764,7 +569,7 @@ function createTools(config, bridge) {
 
   tools.push(defineTool({
     name: 'ensp_gui',
-    description: 'Drive the eNSP window in one batched call. Steps run in a single elevated process, so a whole UI flow costs one launch (~0.3 s) instead of one per action. Convenience ops: start_all, stop_all, open_console (device), device_window (device, alias of open_console), close_console (device). Raw ops: click, postclick, drag, wheel, type, posttext, key, paste, settext, bmclick, show, focus, close, resize, wait, texts, children, wndat, info, shot, screen, open, explore, kill, sleep, ensp.',
+    description: 'Drive the eNSP window in one batched call. Steps share one elevated process. Convenience ops: start_all, stop_all, open_console, device_window, close_console. Raw ops: click, postclick, select_tab (standard SysTabControl32 hwnd, zero-based index; queries geometry and confirms selection), drag, wheel, type, posttext, key, paste, settext, bmclick, show, focus, close, resize, wait, texts, children, wndat, info, shot, screen, open, explore, kill, sleep, ensp.',
     parameters: {
       steps: {
         type: 'array',
@@ -778,7 +583,7 @@ function createTools(config, bridge) {
       allow_cursor_takeover: { type: 'boolean', description: 'Acknowledge that a real click will move the user pointer (it is restored afterwards). Defaults to false.' },
       start_wait_ms: { type: 'integer', description: 'How long start_all waits for console ports to come up; defaults to 25000.' },
       stop_wait_ms: { type: 'integer', description: 'How long stop_all waits for console ports to close; defaults to 12000.' },
-      ready_wait_ms: { type: 'integer', description: 'Budget for prompt plus display version readiness after start_all; defaults to 120000 for cold boots.' },
+      ready_wait_ms: { type: 'integer', description: 'Budget for prompt plus display version readiness after start_all; defaults to 240000 for USG topologies, otherwise 120000. A timeout is not device readiness.' },
       ready_devices: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Optional [{device,username?,password?}] for readiness probes. No password changes are performed.' },
     },
     output: {
@@ -800,6 +605,15 @@ function createTools(config, bridge) {
       if (!Array.isArray(args.steps) || args.steps.length === 0) throw new Error('steps must be a non-empty array')
       for (const step of args.steps) {
         if (!step || typeof step !== 'object' || typeof step.op !== 'string') throw new Error('each GUI step requires op')
+        if (step.op === 'select_tab' && (!Number.isInteger(step.index) || step.index < 0)) throw new Error('select_tab index must be a nonnegative integer')
+        if (step.op === 'select_list') {
+          if ((step.index !== undefined) === (step.text !== undefined)) throw new Error('select_list requires exactly one index or text')
+          if (step.index !== undefined && (!Number.isInteger(step.index) || step.index < 0)) throw new Error('select_list index must be a nonnegative integer')
+          if (step.text !== undefined && (typeof step.text !== 'string' || !step.text.trim() || /[\p{Cc}]/u.test(step.text))) throw new Error('select_list text must be a nonempty label')
+          if (step.expected_count !== undefined && (!Number.isSafeInteger(step.expected_count) || step.expected_count < 1)) throw new Error('select_list expected_count must be a positive integer')
+        }
+        if (step.op === 'start_all' && step.method !== undefined && !['keyboard','toolbar'].includes(step.method)) throw new Error('start_all method must be keyboard or toolbar')
+        if (['start_all','stop_all'].includes(step.op) && step.hwnd !== undefined && (!Number.isSafeInteger(step.hwnd)||step.hwnd<1)) throw new Error('start_all/stop_all hwnd must be a positive integer')
         if (step.op === 'close_project' && step.save !== undefined && !['ask', 'save', 'discard', 'cancel'].includes(step.save)) {
           throw new Error('invalid close_project save policy')
         }
@@ -827,7 +641,9 @@ function createTools(config, bridge) {
       for (const step of args.steps) {
         if (step.op === 'open' && typeof step.path === 'string' && extname(step.path).toLowerCase() === '.topo') {
           const path = await resolveWorkspacePath(step.path, exec, config, { mustExist: true, kind: 'topology_path' })
-          validateTopoConsolePorts((await readTopo(path)).text)
+          const topology = await readTopo(path)
+          validateTopoConsolePorts(topology.text)
+          validateNativeEndpointSettings(topology.text)
           step.path = path
         }
       }
@@ -838,6 +654,9 @@ function createTools(config, bridge) {
         const path = await resolveWorkspacePath(args.topology_path, exec, config, { mustExist: true, kind: 'topology_path' })
         const topology = await readTopo(path)
         validateTopoConsolePorts(topology.text)
+        // A damaged endpoint must not prevent stopping an existing session or
+        // collecting evidence. Guard only operations that may launch it.
+        if(args.steps.some(s=>['start_all','open_console','device_window','device_click'].includes(s.op)))validateNativeEndpointSettings(topology.text)
         devices = topology.devices
       }
       if (args.steps.some(step => ['start_all', 'stop_all'].includes(step.op)) && !devices?.some(device => device.comPort > 0)) {
@@ -881,13 +700,15 @@ function createTools(config, bridge) {
         if (op === 'start_all' || op === 'stop_all') {
           await flush()
           if (halted) continue
-          needsCursor = true
+          const keyboard = op === 'start_all' && step.method !== 'toolbar'
+          needsCursor ||= !keyboard
           const ports = devices.filter(device => device.comPort > 0).map(device => device.comPort)
           let open = []
           let attempts = 0
           let portStateVerified = false
           for (; attempts < 2; attempts++) {
-            await run([{ op: 'device_control', ensp: true,
+            const selector=step.hwnd===undefined?{ensp:true}:{hwnd:step.hwnd}
+            await run(keyboard ? [{ op: 'start_devices', ...selector }] : [{ op: 'device_control', ...selector,
               toolbar: op === 'start_all' ? config.toolbarStart : config.toolbarStop }])
             if (halted) break
             open = await watchPorts(ports, op === 'start_all' ? 'open' : 'closed',
@@ -899,7 +720,7 @@ function createTools(config, bridge) {
           let readiness
           if (!halted && transportReady && op === 'start_all') {
             readiness = await waitDevicesReady(devices.filter(device => device.comPort > 0).map(device => ({ ...device,
-              ...readyCredentials.get(device.name.toLowerCase()) })), { timeoutMs: args.ready_wait_ms ?? 120000 })
+              ...readyCredentials.get(device.name.toLowerCase()) })), { timeoutMs: args.ready_wait_ms ?? (devices.some(d => /^USG/iu.test(d.model ?? '')) ? 240000 : 120000) })
           }
           const ok = !halted && transportReady && (!readiness || readiness.ok)
           results.push({ index: results.length, op, ok, attempts: Math.min(attempts + 1, 2),
@@ -1251,6 +1072,12 @@ function createTools(config, bridge) {
       port: { type: 'integer', description: 'Explicit console port; overrides device lookup.' },
       topology_path: { type: 'string', description: '.topo path used to resolve device -> port.' },
       system_view: { type: 'boolean', description: 'Enter system-view first; defaults to false.' },
+      confirm_lldp_disable: { type: 'boolean', description: 'Explicitly confirm only the known undo lldp enable warning deleting all interface LLDP settings. Defaults to false (declines). Also available per devices[] entry.' },
+      change_dir: { type: 'string', description: 'Opt in to durable change records and redacted before/after snapshots under this workspace directory. Snapshot failure prevents planned commands. Applies to all devices.' },
+      recovery_commands: { type: 'array', items: { type: 'string' }, description: 'Explicit reviewed recovery commands to store with change_dir; also accepted per device. Never executed automatically.' },
+      recover_from: { type: 'string', description: 'Execute the explicit recovery plan from a change manifest.json on its recorded console port. Supply credentials again; save defaults to false. Cannot combine with commands/devices/port/device.' },
+      dry_run: { type: 'boolean', description: 'Validate and preview the entire command/recovery plan without opening consoles or writing journals.' },
+      list_changes: { type: 'string', description: 'Read-only listing of change_dir: completed, failed, interrupted or active-or-unfinished. Cannot combine with commands/devices/recover_from.' },
       username: { type: 'string', description: 'Username when the console asks for AAA login.' },
       password: { type: 'string', description: 'Password when the console asks for AAA login.' },
       passwords: {
@@ -1285,6 +1112,9 @@ function createTools(config, bridge) {
           setupResults: { type: 'array', items: { type: 'object', additionalProperties: true } },
           failure: { type: 'object', additionalProperties: true },
           artifactError: { type: 'object', additionalProperties: true },
+          change_journal: { type: 'string' },
+          preview: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          changes: { type: 'array', items: { type: 'object', additionalProperties: true } },
           skipped: { type: 'array', items: { type: 'string' } },
           ok: { type: 'boolean' },
           devices: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -1295,10 +1125,28 @@ function createTools(config, bridge) {
     },
     async execute(args, exec) {
       const notes = []
+      if (args.dry_run !== undefined && typeof args.dry_run !== 'boolean') throw new Error('dry_run must be boolean')
+      if (args.list_changes !== undefined) {
+        if (['commands', 'devices', 'recover_from'].some(key => args[key] !== undefined)) throw new Error('list_changes cannot combine with execution arguments')
+        const root = await resolveWorkspacePath(args.list_changes, exec, config, { mustExist: true, kind: 'list_changes' })
+        return { port: 0, prompt: '', results: [], notes: ['Journal inventory only; no console connection.'], ok: true, changes: listChangeJournals(root) }
+      }
+      if (args.recover_from !== undefined) {
+        if (['commands', 'devices', 'port', 'device', 'recovery_commands'].some(key => args[key] !== undefined)) throw new Error('recover_from cannot override the recorded target or commands')
+        const source = await resolveWorkspacePath(args.recover_from, exec, config, { mustExist: true, kind: 'recover_from' })
+        const plan = readRecoveryPlan(source)
+        args = { ...args, ...plan, save: args.save ?? false, change_dir: args.change_dir ?? dirname(dirname(source)) }
+      }
       const topologyDevices = args.topology_path
         ? (await readTopo(await resolveWorkspacePath(args.topology_path, exec, config, { mustExist: true, kind: 'topology_path' }))).devices
         : null
       const entries = prepareCliEntries(args, topologyDevices)
+      if (entries.some(entry => entry.recovery_commands) && !args.change_dir) throw new Error('recovery_commands requires change_dir')
+      const changeRoot = args.change_dir === undefined ? null : await resolveWorkspacePath(args.change_dir, exec, config, { kind: 'change_dir' })
+      if (args.dry_run === true) return lossless(redactValue({ port: entries[0].port, prompt: '', results: [], notes: ['Validated preview; no device connection or journal write.'], ok: true,
+        preview: entries.map(entry => ({ device: entry.device, port: entry.port, commands: entry.commands, system_view: entry.system_view === true,
+          save: entry.save ?? entry.commands.some(line => !isReadOnlyCommand(line)), recovery_commands: entry.recovery_commands ?? [], change_dir: changeRoot, recovery_of: entry.recovery_of })) }, createRedactor(credentialValues(args))))
+      if (changeRoot) await mkdir(changeRoot, { recursive: true })
       const outputPaths = new Set()
       for (const entry of entries) {
         if (entry.output_file) {
@@ -1335,6 +1183,7 @@ function createTools(config, bridge) {
             config,
             bridge,
             echoArgs: solo ? args : null,
+            changeRoot,
           })
           runs.push(run)
           if (!run.ok && args.continue_on_error !== true) stopped = true
@@ -1468,7 +1317,7 @@ function createTools(config, bridge) {
           ? await resolveWorkspacePath(args.out_path, exec, config, { kind: 'out_path' })
           : join(dirname(path), `${basename(path, '.topo')}.edited.topo`)
         await prepareOutput(out, args.allow_overwrite === true, 'out_path')
-        await writeTopo(out, text)
+        await writeTopo(out, text, { encoding: parsed.encoding })
         written = out
         notes.push('eNSP 需要在关闭该拓扑后重新打开，改动才会显示。')
       }

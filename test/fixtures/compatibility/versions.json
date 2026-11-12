@@ -1,0 +1,23 @@
+[
+  {
+    "device": "ENT-SW",
+    "output": "Huawei Versatile Routing Platform Software\nVRP (R) software, Version 5.110 (S5700 V200R001C00)\nCopyright (c) 2000-2011 HUAWEI TECH CO., LTD\n\nQuidway S5700-28C-HI Routing Switch uptime is 0 week, 0 day, 0 hour, 4 minutes",
+    "expected_model": "S5700",
+    "source": "dsh-ensp-experiments/test-results/fixes-20261111/acceptance-final.json",
+    "collected_date": "2026-11-11"
+  },
+  {
+    "device": "ENT-FW",
+    "output": "2026-11-11 10:18:21.460 \nHuawei Versatile Routing Platform Software\nVRP (R) Software, Version 5.170 (USG6000V1 V500R005C10SPC300)\nCopyright (C) 2014-2018 Huawei Technologies Co., Ltd.\nUSG6000V1-ENSP uptime is 0 week, 0 day, 0 hour, 3 minutes\n\n\nIPS Signature Database Version   : 2018122108\nIPS Engine Version               : V200R005C10SPC030\nAV Signature Database Version    : \nSA Signature Database Version    : 2018102401\nC&C Domain Name Database Version : \nFILE Reputation Database Version : \nLocation Database Version        : 2018061815",
+    "expected_model": "USG6000V",
+    "source": "dsh-ensp-experiments/test-results/fixes-20261111/acceptance-final.json",
+    "collected_date": "2026-11-11"
+  },
+  {
+    "device": "ISP-R1",
+    "output": "Huawei Versatile Routing Platform Software\nVRP (R) software, Version 5.130 (AR2200 V200R003C00)\nCopyright (C) 2011-2012 HUAWEI TECH CO., LTD\nHuawei AR2220 Router uptime is 0 week, 0 day, 0 hour, 4 minutes\nBKP 0 version information: \n1. PCB      Version  : AR01BAK2A VER.NC\n2. If Supporting PoE : No\n3. Board    Type     : AR2220\n4. MPU Slot Quantity : 1\n5. LPU Slot Quantity : 6\n\nMPU 0(Master) : uptime is 0 week, 0 day, 0 hour, 4 minutes\nMPU version information : \n1. PCB      Version  : AR01SRU2A VER.A\n2. MAB      Version  : 0\n3. Board    Type     : AR2220\n4. BootROM  Version  : 0",
+    "expected_model": "AR2220",
+    "source": "dsh-ensp-experiments/test-results/fixes-20261111/acceptance-final.json",
+    "collected_date": "2026-11-11"
+  }
+]

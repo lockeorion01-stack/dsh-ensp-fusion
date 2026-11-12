@@ -26,7 +26,7 @@ await check('package entrypoints and lockfile', async () => {
 await check('DSH registration contract', async () => {
   const tools=[],skills=[],sections=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:(...s)=>sections.push(s)}},Config({}))
-  assert.equal(tools.length,12);assert.equal(new Set(tools.map(t=>t.name)).size,12)
+  assert.equal(tools.length,16);assert.equal(new Set(tools.map(t=>t.name)).size,16)
   assert.equal(skills.length,2);assert.ok(sections.length)
   for(const skill of skills){assert.ok(skill.content);await access(skill.resourceBase.path)}
   const patch = await readFile(join(root,pkg.dsh.bundle.patch),'utf8')

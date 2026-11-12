@@ -1,15 +1,63 @@
 {
   "name": "dsh-ensp-fusion",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Huawei eNSP unified DSH/MCP/CLI plugin: topology construction, scenarios, hardened automation, convergence and evidence reports",
   "license": "GPL-3.0-or-later",
-  "exports": { ".": "./index.js", "./mcp": "./mcp/server.js", "./build": "./upstream/lizi600jin/src/core/build.mjs", "./topology": "./upstream/lizi600jin/src/core/topology.mjs", "./presets": "./upstream/lizi600jin/src/core/presets.mjs" },
-  "bin": { "ensp-fusion": "./bin/ensp-fusion.mjs", "ensp-fusion-mcp": "./bin/dsh-ensp-mcp.mjs", "ensp-fusion-lab": "./bin/dsh-ensp-lab.mjs" },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "files": ["index.js", "base.js", "lib", "mcp", "bin", "upstream", "skills", "locale", "icon.svg", "cordis.patch.yml", "docs", "examples", "test/fixtures", "LICENSE", "LICENSE-MIT", "NOTICE.md"],
-  "scripts": { "test": "node test/mcp-smoke.mjs && node --test test/*.test.mjs", "test:fusion": "node --test test/fusion.test.mjs", "test:package": "node scripts/verify-package.mjs", "check:plugin": "node scripts/check-plugin.mjs", "audit:sources": "node scripts/audit-sources.mjs" },
-  "engines": { "node": ">=20" },
-  "peerDependencies": { "@deepseek-ai/dsh-tools": "*", "@deepseek-ai/schemastery": "*" }
+  "exports": {
+    ".": "./index.js",
+    "./mcp": "./mcp/server.js",
+    "./build": "./upstream/lizi600jin/src/core/build.mjs",
+    "./topology": "./upstream/lizi600jin/src/core/topology.mjs",
+    "./presets": "./upstream/lizi600jin/src/core/presets.mjs"
+  },
+  "bin": {
+    "ensp-fusion": "./bin/ensp-fusion.mjs",
+    "ensp-fusion-mcp": "./bin/dsh-ensp-mcp.mjs",
+    "ensp-fusion-lab": "./bin/dsh-ensp-lab.mjs",
+    "ensp-fusion-accept": "./bin/ensp-fusion-accept.mjs",
+    "ensp-fusion-doctor": "./bin/ensp-fusion-doctor.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "index.js",
+    "base.js",
+    "lib",
+    "mcp",
+    "bin",
+    "upstream",
+    "skills",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "docs",
+    "examples",
+    "test/fixtures",
+    "LICENSE",
+    "LICENSE-MIT",
+    "NOTICE.md",
+    "requirements-windows.lock.txt",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "test": "node test/mcp-smoke.mjs && node --test test/*.test.mjs",
+    "test:fusion": "node --test test/fusion.test.mjs",
+    "test:package": "node scripts/verify-package.mjs",
+    "check:plugin": "node scripts/check-plugin.mjs",
+    "audit:sources": "node scripts/audit-sources.mjs",
+    "check:release": "node scripts/check-release.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
+  }
 }

@@ -1,0 +1,23 @@
+# 统一行尾: 文本文件一律 LF
+* text=auto eol=lf
+
+# eNSP 拓扑是编码敏感数据, 不做任何行尾转换
+*.topo -text
+
+# 二进制资源不做转换
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.ico -text
+*.pdf -text
+*.docx -text
+*.pptx -text
+*.xlsx -text
+*.pcap -text
+*.pcapng -text
+*.vdi -text
+*.vmdk -text
+*.qcow2 -text
+*.iso -text
+*.tgz -text

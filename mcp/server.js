@@ -1,6 +1,6 @@
 // MCP server for dsh-ensp.
 //
-// The six tools are not re-implemented here: `apply()` from ../index.js is called
+// Tools are not re-implemented here: `apply()` from ../index.js is called
 // with a stand-in context, which registers exactly the same tool objects the DSH
 // plugin uses (same names, same schemas, same handlers). This file only translates
 // between MCP's JSON-RPC surface and those tools, so behaviour cannot drift between

@@ -23,7 +23,9 @@ $Python = 'C:/path/to/python.exe' # 替换为实际路径
 & $Python -c "import win32gui; from PIL import Image; import docx; print('OK')"
 ```
 
-仅使用离线拓扑时不需要GUI依赖。这里没有锁定Python包版本，也没有全部Python版本兼容承诺；离线机器应提前准备匹配安装包和Node缓存。
+仅使用离线拓扑时不需要GUI依赖。`requirements-windows.lock.txt` 固定本机 CPython3.13.12 的已验证依赖组合，可用同一解释器 `-m pip install -r requirements-windows.lock.txt` 安装；其他Python版本仍需单独验证。离线机器应提前准备匹配安装包和Node缓存。
+
+执行只读环境检查：`node bin/ensp-fusion-doctor.mjs --python C:/path/to/python.exe`。可通过 `--ensp`、`--vbox` 指定本机程序路径。检查输出Node/Python/依赖版本、缺失项、锁定版本差异及VirtualBox版本；版本差异单列报告，不自动安装或修改环境。环境检查通过不代表已提权、镜像已注册、设备能启动或业务已通过。统一正式验收见 [ACCEPTANCE-RUNNER.zh-CN.md](ACCEPTANCE-RUNNER.zh-CN.md)。
 
 ## 2. 源码部署与工作区
 
@@ -36,7 +38,7 @@ npm ci --ignore-scripts
 node bin/ensp-fusion.mjs tools
 ```
 
-tools应输出12个工具。即使只用MCP/CLI，也要安装本包的Node依赖，包括@deepseek-ai/dsh-tools与@deepseek-ai/schemastery；不要求启动DSH应用，但不能只复制入口JS。
+tools应输出16个工具。即使只用MCP/CLI，也要安装本包的Node依赖，包括@deepseek-ai/dsh-tools与@deepseek-ai/schemastery；不要求启动DSH应用，但不能只复制入口JS。
 
 源码版本private=true，没有公开npm发布承诺。不要把npm publish当部署流程。分发包的files清单不包含完整开发脚本、测试和锁文件；npm test、check:plugin等维护命令应在完整源码工程运行。
 
@@ -77,7 +79,7 @@ tools应输出12个工具。即使只用MCP/CLI，也要安装本包的Node依�
 
 MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作为命令行选项。GUI批次可使用工具timeout_ms；配置API另有timeoutMs。
 
-初始化后应列出12工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的快照，拓扑变更后需重新list。
+1.1.0 初始化后应列出16工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的快照，拓扑变更后需重新list。新增服务验收与兼容性说明见 REMAINING-MODULES.zh-CN.md。
 
 ## 4. DSH接入
 
@@ -161,7 +163,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 
 ## 8. 验收和交付
 
-1. 源码：tools列出12项，npm test通过。
+1. 源码：tools列出16项，npm test通过。
 2. 分发：test:package验证临时打包、离线安装和CLI/MCP；不能证明设备启动。
 3. 客户端：MCP初始化/工具列表或DSH实际调用成功。
 4. 实机：专用实验验证就绪、配置、保存、协议与业务正反向断言。

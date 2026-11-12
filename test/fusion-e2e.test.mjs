@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Real MCP subprocess and real loopback sockets; devices remain simulated.
-async function harness(t, password = false) {
+async function harness(t, password = false, outputs = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'ensp-fusion-e2e-'))
   const sockets = new Set(), commands = []
   const server = createServer(socket => {
@@ -27,10 +27,10 @@ async function harness(t, password = false) {
         if (!cmd) continue
         commands.push(cmd)
         if (password) continue
-        const output = cmd === 'display version' ? 'Huawei Versatile Routing Platform (VRP)'
+        const output = outputs[cmd] ?? (cmd === 'display version' ? 'VRP (R) software, Version 5.110 (S5700 V200R001C00)'
           : cmd === 'display ospf peer brief' ? '1.1.1.1 Full'
-          : 'Error: Unrecognized command found at position.'
-        socket.write(`${cmd}\r\n${output}\r\n<R1>`)
+          : 'Error: Unrecognized command found at position.')
+        socket.write(`${cmd}\r\n${typeof output === 'function' ? output() : output}\r\n<R1>`)
       }
     })
   })
@@ -74,10 +74,128 @@ async function harness(t, password = false) {
   const call = async (name, args) => {
     const response = await rpc('tools/call', { name, arguments: args })
     assert.equal(response.error, undefined, JSON.stringify(response))
-    return { wire: response.result, value: JSON.parse(response.result.content[0].text) }
+    let value
+    try { value = JSON.parse(response.result.content[0].text) } catch { value = response.result.content[0].text }
+    return { wire: response.result, value }
   }
   return { dir, port: server.address().port, commands, call, rpc }
 }
+
+test('MCP inspection automatically supplements USG brief missing neighbor identity', async t => {
+  const h=await harness(t,false,{
+    'display current-configuration':'sysname R1\n local-user admin password cipher device-only-secret',
+    'display ip interface brief':'GE1/0/1 up up',
+    'display ip routing-table':'route',
+    'display lldp neighbor brief':'Interface GigabitEthernet1/0/1 has 1 Neighbors:\nNeighbor 1:\nPortId: GE0/0/2',
+    'display lldp neighbor':'Interface GigabitEthernet1/0/1 has 1 Neighbors:\nNeighbor 1:\nPortId: GE0/0/2\nSysName: SW',
+  })
+  const inspected=await h.call('ensp_inspect',{port:h.port,timeout_ms:2000})
+  const evidence=JSON.parse(inspected.value.data)
+  assert.equal(evidence.ok,true)
+  assert.equal(evidence.results.length,6)
+  assert.equal(evidence.results.at(-1).command,'display lldp neighbor')
+  assert.ok(evidence.results.every(row => Number.isFinite(Date.parse(row.collected_at))))
+  assert.doesNotMatch(inspected.value.data, /device-only-secret/)
+  assert.ok(!h.commands.includes('lldp enable'))
+})
+
+test('MCP inspection retains partial evidence and stops at rejected command without saving', async t => {
+  const h = await harness(t)
+  const inspected = await h.call('ensp_inspect', { port: h.port, timeout_ms: 2000 })
+  assert.equal(inspected.value.ok, false)
+  assert.equal(inspected.wire.isError, true)
+  const evidence = JSON.parse(inspected.value.data)
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.results.length, 2)
+  assert.equal(evidence.results[0].ok, true)
+  assert.equal(evidence.results[1].ok, false)
+  assert.equal(evidence.skipped.length, 3)
+  assert.ok(!h.commands.includes('save'))
+  assert.ok(!h.commands.includes('lldp enable'))
+})
+
+test('journal snapshots surround commands and explicit recovery creates a linked journal', async t => {
+  const h = await harness(t, false, { 'display current-configuration': 'sysname R1\n password cipher sensitive-value',
+    'sysname R2': 'Done', 'sysname R1': 'Done' })
+  const result = await h.call('ensp_cli', { port: h.port, commands: ['sysname R2'], save: false,
+    change_dir: 'changes', recovery_commands: ['sysname R1'] })
+  assert.equal(result.value.ok, true, JSON.stringify(result.value))
+  const manifest = result.value.change_journal
+  assert.ok(manifest)
+  const folder = join(manifest, '..')
+  assert.doesNotMatch(await readFile(join(folder, 'before.txt'), 'utf8'), /sensitive-value/)
+  const events = (await readFile(join(folder, 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.deepEqual(events.map(e => e.type), ['started', 'prepared', 'command-started', 'command-finished', 'configuration-diff', 'finished'])
+  assert.deepEqual(h.commands, ['display current-configuration', 'display version', 'sysname R2', 'display current-configuration'])
+  const recovered = await h.call('ensp_cli', { recover_from: manifest })
+  assert.equal(recovered.value.ok, true, JSON.stringify(recovered.value))
+  const recoveryManifest = JSON.parse(await readFile(recovered.value.change_journal, 'utf8'))
+  assert.equal(recoveryManifest.recovery_of, manifest)
+  const inventory = await h.call('ensp_cli', { list_changes: 'changes' })
+  assert.equal(inventory.value.changes.length, 2)
+  assert.ok(inventory.value.changes.every(item => item.status === 'completed'))
+  assert.ok(!h.commands.includes('save'))
+})
+
+test('prechange snapshot rejection blocks configuration; dry run never contacts the console', async t => {
+  const h = await harness(t)
+  const preview = await h.call('ensp_cli', { port: h.port, commands: ['sysname R2'], dry_run: true })
+  assert.equal(preview.value.ok, true)
+  assert.equal(preview.value.preview[0].commands[0], 'sysname R2')
+  assert.deepEqual(h.commands, [])
+  const result = await h.call('ensp_cli', { port: h.port, commands: ['sysname R2'], change_dir: 'changes', save: false })
+  assert.equal(result.value.ok, false)
+  assert.deepEqual(h.commands, ['display current-configuration'])
+  assert.deepEqual(result.value.skipped, ['sysname R2'])
+})
+
+test('postchange snapshot failure marks incomplete evidence and blocks unguarded recovery', async t => {
+  let snapshots = 0
+  const h = await harness(t, false, { 'display current-configuration': () => ++snapshots === 2 ? 'Error: Unrecognized command' : 'sysname R1',
+    'sysname R2': 'Done', 'sysname R1': 'Done' })
+  const changed = await h.call('ensp_cli', { port: h.port, commands: ['sysname R2'], save: false,
+    change_dir: 'changes', recovery_commands: ['sysname R1'] })
+  assert.equal(changed.value.ok, false)
+  assert.equal(changed.value.results[0].ok, true)
+  const events = (await readFile(join(changed.value.change_journal, '..', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.equal(events.at(-1).evidence_incomplete, true)
+  const recovered = await h.call('ensp_cli', { recover_from: changed.value.change_journal })
+  assert.equal(recovered.wire.isError, true)
+  assert.match(JSON.stringify(recovered.value), /requires a valid post-change/u)
+  assert.ok(!h.commands.includes('sysname R1'))
+})
+
+test('recovery refuses configuration drift before sending any recovery commands', async t => {
+  let config = 'sysname R1\ninterface GE0/0/1\n description original'
+  const h = await harness(t, false, { 'display current-configuration': () => config, 'sysname R2': 'Done', 'sysname R1': 'Done' })
+  const changed = await h.call('ensp_cli', { port:h.port, commands:['sysname R2'], save:false, change_dir:'changes', recovery_commands:['sysname R1'] })
+  assert.equal(changed.value.ok, true)
+  config += '\n description later-human-edit'
+  const recovered = await h.call('ensp_cli', {recover_from:changed.value.change_journal})
+  assert.equal(recovered.value.ok, false)
+  assert.match(JSON.stringify(recovered.value), /configuration drift/u)
+  assert.ok(!h.commands.includes('sysname R1'))
+})
+
+test('partial rejected change retains journal progress and CLI inspection failure exits nonzero', async t => {
+  const h = await harness(t, false, { 'display current-configuration': 'sysname R1', 'sysname R2': 'Done' })
+  const result = await h.call('ensp_cli', { port: h.port, commands: ['sysname R2', 'invalid-command', 'sysname R3'], save: false, change_dir: 'changes' })
+  assert.equal(result.value.ok, false)
+  assert.equal(result.value.results.length, 2)
+  assert.deepEqual(result.value.skipped, ['sysname R3'])
+  const events = (await readFile(join(result.value.change_journal, '..', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.equal(events.filter(e => e.type === 'command-started').length, 2)
+  assert.equal(events.at(-1).ok, false)
+  assert.ok(!h.commands.includes('sysname R3'))
+  const argsPath = join(h.dir, 'inspect.json')
+  await writeFile(argsPath, JSON.stringify({ port: h.port, timeout_ms: 2000 }))
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/ensp-fusion.mjs', import.meta.url)), 'call', 'ensp_inspect', argsPath, h.dir], { windowsHide: true })
+  let output = ''
+  child.stdout.on('data', bytes => { output += bytes })
+  const code = await new Promise(resolve => child.on('exit', resolve))
+  assert.equal(code, 1)
+  assert.equal(JSON.parse(output).ok, false)
+})
 
 test('MCP stdio completes build, topology read, resource refresh and overwrite rejection', async t => {
   const h = await harness(t)
@@ -132,6 +250,8 @@ test('MCP stdio exposes missing authentication as failure and bounds wait', asyn
   const wait = await h.call('ensp_wait', {port:h.port,kind:'output',command:'display version',expect:'VRP',timeout_ms:200,interval_ms:50})
   assert.equal(wait.wire.isError, true)
   assert.match(wait.value.error, /no credentials/)
+  assert.equal(JSON.parse(wait.value.data).converged, false)
+  assert.equal(JSON.parse(wait.value.data).attempts, 1)
   assert.ok(Date.now()-started < 2000)
   assert.deepEqual(h.commands, [])
 })

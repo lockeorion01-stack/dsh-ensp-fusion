@@ -12,17 +12,17 @@ import { parseTopo } from '../lib/topo.js'
 
 const args = () => ({ devices: [{ name: 'R1', model: 'AR2220' }, { name: 'R2', model: 'AR2220' }], links: [{ a: 'R1', a_port: 'GigabitEthernet0/0/0', b: 'R2', b_port: 'GigabitEthernet0/0/0' }] })
 async function workspace(t) { const p = await mkdtemp(join(tmpdir(), 'ensp-fusion-')); t.after(() => rm(p, { recursive: true, force: true })); return p }
-test('unified registry has twelve unique tools and closed schemas', () => {
+test('unified registry has sixteen unique tools and closed schemas', () => {
   const r = createRegistry({ quiet: true })
-  assert.equal(r.tools.length, 12); assert.equal(new Set(r.tools.map(t => t.name)).size, 12)
+  assert.equal(r.tools.length,16); assert.equal(new Set(r.tools.map(t => t.name)).size,16)
   const build = r.tools.find(t => t.name === 'ensp_build')
   assert.deepEqual(build.inputSchema.required, ['output_path','devices'])
   assert.deepEqual(build.inputSchema.properties.devices.items.required, ['name','model'])
 })
-test('DSH registers both workflow skills and the same twelve tools', () => {
+test('DSH registers both workflow skills and the same sixteen tools', () => {
   const skills=[],tools=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:()=>{}}},Config({}))
-  assert.equal(tools.length,12)
+  assert.equal(tools.length,16)
   assert.deepEqual(skills.map(s=>s.name),['ensp-automation','ensp-fusion'])
   assert.ok(skills[1].content.includes('ensp_wait'))
 })
@@ -40,6 +40,15 @@ test('rejects bad models, ports, names, duplicate interfaces and PC XML injectio
   const dup = args(); dup.devices.forEach(d => d.options = { comPort: 2000 }); assert.throws(() => generateTopology(dup), /duplicate comPort/)
   const links = args(); links.links.push(links.links[0]); assert.throws(() => generateTopology(links), /already connected/)
   assert.throws(() => generateTopology({ devices: [{ name: 'PC1', model: 'PC', options: { pc: { ip: '"/><evil>' } } }] }), /IPv4/)
+})
+
+test('native Client and Server build addressed Ethernet endpoints and are excluded from LLDP',async()=>{
+  const {topologyLldpLinks}=await import('../lib/topology-links.js')
+  const topology=generateTopology({devices:[{name:'SW',model:'S5700'},...['Client','Server'].map((model,i)=>({name:model,model,options:{pc:{ip:`10.77.0.${i+10}`,mask:'255.255.255.0',gateway:'10.77.0.1',dns:'10.77.0.100'}}}))],links:['Client','Server'].map((a,i)=>({a,a_port:'Ethernet0/0/1',b:'SW',b_port:`GigabitEthernet0/0/${i+1}`}))})
+  const xml=serialiseTopology(topology)
+  assert.equal((xml.match(/interfacename="Ethernet" count="1"/gu)??[]).length,2)
+  assert.ok(topology.devices.filter(d=>d.model!=='S5700').every(d=>d.comPort===0&&d.settings.includes('-ipv4dns 10.77.0.100')))
+  const result=topologyLldpLinks(xml);assert.equal(result.links.length,0);assert.equal(result.excluded.length,2);assert.equal(result.unresolved.length,0)
 })
 test('build is exclusive, workspace confined, and independent of cwd', async t => {
   const dir = await workspace(t), r = createRegistry({ workspace: dir })

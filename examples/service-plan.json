@@ -1,0 +1,12 @@
+{
+  "title": "Host-to-lab service acceptance",
+  "vantage": "host",
+  "rounds": 3,
+  "interval_ms": 1000,
+  "timeout_ms": 3000,
+  "targets": [
+    { "name": "web", "kind": "http", "url": "http://192.0.2.10/health", "expect_status": 200, "expect_body": "ok" },
+    { "name": "dns", "kind": "dns", "server": "192.0.2.53", "query": "web.lab.test", "rrtype": "A", "expect_addresses": ["192.0.2.10"] },
+    { "name": "transport", "kind": "tcp", "host": "192.0.2.10", "port": 443 }
+  ]
+}

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 const root=fileURLToPath(new URL('../',import.meta.url))
@@ -10,18 +10,29 @@ function run(command,args,cwd){const r=spawnSync(command,args,{cwd,encoding:'utf
 const temp=await mkdtemp(join(tmpdir(),'ensp-fusion-package-'))
 try{
   const metadata=JSON.parse(run(npm,['pack','--ignore-scripts','--json','--pack-destination',temp],root))[0]
-  for(const file of ['index.js','base.js','LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','test/fixtures/minimal.topo','lib/bridge.py'])assert.ok(metadata.files.some(f=>f.path===file),file)
+  for(const file of ['index.js','base.js','LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','test/fixtures/minimal.topo','lib/bridge.py','lib/usg-health.js','requirements-windows.lock.txt','bin/ensp-fusion-accept.mjs','bin/ensp-fusion-doctor.mjs','CHANGELOG.md','CONTRIBUTING.md','docs/releases/1.1.0.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','docs/GITHUB-RELEASE.zh-CN.md'])assert.ok(metadata.files.some(f=>f.path===file),file)
   run('tar',['-xf',join(temp,metadata.filename),'-C',temp],temp)
   const pkg=join(temp,'package')
   await writeFile(join(pkg,'package-lock.json'),await readFile(resolve(root,'package-lock.json')))
   run(npm,['ci','--ignore-scripts','--offline','--no-audit'],pkg)
-  const tools=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'tools'],temp));assert.equal(tools.length,12)
+  const tools=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'tools'],temp));assert.equal(tools.length,16)
   await mkdir(join(temp,'lab'))
   const result=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'call','ensp_build',join(pkg,'examples/build-router-pair.json'),join(temp,'lab')],temp));assert.equal(result.ok,true)
   const xml=await readFile(join(temp,'lab/router-pair.topo'),'utf8');assert.ok(xml.includes('name="R1"'))
+  assert.match(run(process.execPath,[join(pkg,'bin/ensp-fusion-doctor.mjs'),'--help'],temp),/Read-only/u)
+  const acceptance=join(temp,'acceptance.json')
+  await writeFile(acceptance,JSON.stringify({version:1,deadline_ms:10000,steps:[{name:'native-client',tool:'ensp_build',args:{output_path:'client.topo',devices:[{name:'Client',model:'Client',options:{pc:{ip:'10.77.0.10',dns:'10.77.0.100'}}}]}}]}))
+  const accepted=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion-accept.mjs'),'run',acceptance,join(temp,'lab'),'runs/nested'],temp))
+  assert.equal(accepted.status,'PASS');assert.equal(JSON.parse(await readFile(join(accepted.run_dir,'summary.json'),'utf8')).ok,true)
+  assert.match(await readFile(join(temp,'lab/client.topo'),'utf8'),/interfacename="Ethernet" count="1"/u)
+  const evidenceFile=join(temp,'business-evidence.json')
+  await writeFile(evidenceFile,JSON.stringify({version:1,kind:'stability',samples:[{completed:true,transmitted:5,received:5,loss_percent:0}]}))
+  assert.equal(JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion-accept.mjs'),'assess',evidenceFile],temp)).status,'PASS')
+  const packagedRecovery=JSON.parse(run(process.execPath,['--input-type=module','-e',`import {recoverAcceptance} from ${JSON.stringify(new URL('lib/acceptance-recovery.js',pathToFileURL(pkg+'/')).href)};console.log(JSON.stringify({available:typeof recoverAcceptance==='function'}))`],temp))
+  assert.equal(packagedRecovery.available,true)
   const requests=[{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18'}},{jsonrpc:'2.0',id:2,method:'tools/list'}]
   const wire=spawnSync(process.execPath,[join(pkg,'bin/dsh-ensp-mcp.mjs'),'--workspace',join(temp,'lab')],{encoding:'utf8',input:requests.map(r=>JSON.stringify(r)).join('\n')+'\n',timeout:10000,windowsHide:true})
   assert.equal(wire.status,0,wire.stderr)
-  const replies=wire.stdout.trim().split('\n').map(line=>JSON.parse(line));assert.equal(replies.length,2);assert.equal(replies[0].result.serverInfo.name,'dsh-ensp-fusion');assert.equal(replies[1].result.tools.length,12)
-  console.log(JSON.stringify({ok:true,files:metadata.files.length,packedBytes:metadata.size,unpackedBytes:metadata.unpackedSize,toolCount:tools.length,checks:['licenses','offline clean install','CLI external cwd','topology generation','MCP stdio initialize/list']},null,2))
+  const replies=wire.stdout.trim().split('\n').map(line=>JSON.parse(line));assert.equal(replies.length,2);assert.equal(replies[0].result.serverInfo.name,'dsh-ensp-fusion');assert.equal(replies[1].result.tools.length,16)
+  console.log(JSON.stringify({ok:true,files:metadata.files.length,packedBytes:metadata.size,unpackedBytes:metadata.unpackedSize,toolCount:tools.length,checks:['licenses and release documentation','offline clean install','CLI external cwd','topology generation','packaged acceptance runner','packaged business evidence assessment','packaged interrupted recovery module','native Client Ethernet and DNS','doctor help','MCP stdio initialize/list']},null,2))
 }finally{await rm(temp,{recursive:true,force:true})}
