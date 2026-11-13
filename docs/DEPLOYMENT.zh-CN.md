@@ -102,6 +102,14 @@ MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作
 
 用宿主实际采用的包管理流程解析link依赖，再重新加载或重启。不同包管理器的link协议支持不能混用。仓库没有一个适用所有DSH安装的profile绝对路径，不应覆盖猜测的位置。宿主需要tools、skills、systemPrompt注入服务。
 
+### 安装目录与运行路径
+
+本地目录或压缩包安装应先在独立临时目录完整解包，确认 `index.js`、所有导出、CLI 入口和 `cordis.patch.yml` 均存在且非空，再提升为正式目录并切换依赖。npm 包含一层 `package/` 根目录；不要把它多嵌套一层，也不要清空运行进程仍引用的旧目录。完整源码的 `npm run test:package` 会逐文件比较实际解包大小与源码 SHA256，并校验所有声明入口；目标副本另执行 `npm run check:dsh -- --plugin-root <实际目录>`。
+
+**DSH rc.3 中，同名插件从本地 link 切到 GitHub、或实际安装目录变化后，需要正常退出并完整重启宿主。** Node 模块解析会保留已解析的真实目录；插件开关、保存依赖或更新详情页都不能证明路由已切换。先保存会话，保留旧目录至重启完成，随后只读调用 `ensp_status`，比较 `build.root` 与目标安装目录、`build.fingerprint` 与该副本，并记录 `loadedAt`。若尚未一致，应保留旧副本和备份，继续排查，不能仅以版本相同判定升级成功。
+
+2026-11-14 本机一次旧路径 `index.js` 缺失已恢复，并以运行中工具回读确认切到 GitHub 安装副本，见 [1.1.3 后续部署核验](releases/1.1.3.zh-CN.md#后续部署核验)。这不改变设备业务验收结论。
+
 cordis.patch.yml中的插件name为dsh-ensp-fusion，id为ensp-fusion。配置示例：
 
 ```yaml
@@ -147,6 +155,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 | 现象 | 检查与处理 |
 | --- | --- |
 | ERR_MODULE_NOT_FOUND | 源码根目录按锁文件npm ci，检查peer依赖，不只复制入口 |
+| ENOENT，打开旧 local-plugins 路径的 index.js 失败 | 检查实际目录是否为空或多嵌套 package/；从已验证包恢复完整副本。安装来源/真实目录变化时保留旧路径，正常退出并完整重启 DSH，核对运行中 build.root 与 fingerprint；不能直接归因于兼容性或包损坏 |
 | 旧插件与 DSH rc.1/rc.3 不兼容 | 更新到 1.1.3 源码/修复包并解析依赖，重新加载插件后核对版本与构建指纹；见 1.1.3 发布说明 |
 | node找不到/版本不符 | 检查客户端PATH，必要时用node.exe绝对路径 |
 | Python导入失败 | 用实际配置解释器执行-m pip和import测试 |
