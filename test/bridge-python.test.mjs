@@ -12,8 +12,8 @@ const python = candidates.find((exe) => spawnSync(exe, ['-B', '-c', 'import sys'
 
 function runPython(t, script) {
   if (!python) return t.skip('Python unavailable; set ENSP_TEST_PYTHON to run bridge checks')
-  const result = spawnSync(python, ['-B', '-c', script, bridgePath], {
-    encoding: 'utf8', windowsHide: true, timeout: 30000,
+  const result = spawnSync(python, ['-B', '-', bridgePath], {
+    input: script, encoding: 'utf8', windowsHide: true, timeout: 30000,
   })
   assert.equal(result.status, 0, `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`)
 }
@@ -47,6 +47,44 @@ exec(compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec'), b.__dict__)
 
 
 class BridgeTests(unittest.TestCase):
+    def test_inventory_retains_hidden_windows_and_marks_partial_process_scan(self):
+        row = {'hwnd': 11, 'pid': 42, 'visible': False}
+        process = types.SimpleNamespace(EnumProcesses=Mock(return_value=[0, 42, 99]))
+        with patch.object(b, '_ensp_owned_windows', return_value=[row]) as discover, \
+             patch.object(b, 'win32process', process), \
+             patch.object(b, 'process_executable', side_effect=lambda pid: 'C:/eNSP/eNSP_Client.exe' if pid == 42 else None), \
+             patch.object(b, 'owned_dialogs', return_value=[{'hwnd': 12}]), \
+             patch.object(b.win32gui, 'IsWindowEnabled', return_value=False, create=True), \
+             patch.object(b.user32, 'IsHungAppWindow', return_value=False, create=True):
+            result = b.ensp_inventory()
+            self.assertFalse(discover.call_args.kwargs['visible_only'])
+            self.assertEqual(result['processes'][0]['pid'], 42)
+            self.assertFalse(result['main_windows'][0]['visible'])
+            self.assertFalse(result['main_windows'][0]['enabled'])
+            self.assertFalse(result['process_scan_complete'])
+            self.assertEqual(result['uninspected_process_count'], 1)
+            self.assertFalse(result['active_project']['verified'])
+
+    def test_save_dialog_posts_once_and_does_not_claim_project_saved(self):
+        buttons = [{'hwnd': h, 'cls': 'Button', 'visible': True, 'rect': [i, 0, i + 1, 1]} for i, h in enumerate([21, 22, 23])]
+        with patch.object(b, 'owned_dialogs', return_value=[{'hwnd': 12, 'title': 'eNSP'}]), \
+             patch.object(b, 'children', return_value=buttons), \
+             patch.object(b.win32gui, 'GetDlgCtrlID', side_effect=lambda h: {21: 6, 22: 7, 23: 2}[h], create=True), \
+             patch.object(b.win32gui, 'PostMessage', create=True) as post, \
+             patch.object(b, 'window_exists', return_value=False):
+            result = b.dialog_decision(11, 12, 'save')
+            post.assert_called_once_with(12, 273, 6, 21)
+            self.assertTrue(result['confirmed'])
+            self.assertFalse(result['projectPersistenceVerified'])
+            with self.assertRaisesRegex(RuntimeError, 'stale'):
+                b.dialog_decision(11, 99, 'save')
+            post.assert_called_once()
+        with patch.object(b, 'owned_dialogs', return_value=[{'hwnd': 12, 'title': 'Unknown'}]), \
+             patch.object(b, 'children', return_value=[]), \
+             patch.object(b.win32gui, 'PostMessage', create=True) as post:
+            self.assertFalse(b.dialog_decision(11, 12, 'discard')['ok'])
+            post.assert_not_called()
+
     def test_list_selection_by_native_label_rejects_missing_and_ambiguous_items(self):
         gui = types.SimpleNamespace(GetClassName=Mock(return_value='ListBox'),
             IsWindowVisible=Mock(return_value=True), GetWindowLong=Mock(return_value=0),

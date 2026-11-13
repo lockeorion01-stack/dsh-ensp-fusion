@@ -4,11 +4,11 @@
 
 将拓扑构建、设备配置、协议检查、业务探测和报告取证连接成一套可重复执行的实验流程。适用于网络教学、协议实验、园区方案验证，以及需要通过 AI 客户端调用 eNSP 的开发者。
 
-- **统一调用**：三个入口复用同一组 16 个工具，配套 23 个实验指导和 2 个 DSH 技能。
+- **统一调用**：三个入口复用同一组 19 个工具，配套 23 个实验指导和 2 个 DSH 技能。
 - **完整流程**：从生成拓扑、配置前探查、下发命令，到等待收敛、执行断言和整理证据。
 - **可追溯结果**：支持变更预览、控制台锁、可选快照日志和受保护恢复；验收区分通过、失败、错误和未执行。
 
-当前版本 **1.1.1**，目标宿主 **DSH 0.2.2-rc.1**。本次修复 1.1.0 的旧 SDK 依赖导致的加载拦截，详见 [1.1.1 更新说明](docs/releases/1.1.1.zh-CN.md)和[完整更新日志](CHANGELOG.md)。npm 尚未发布，请按下文使用源码或本地打包安装。
+当前版本 **1.1.3**，支持 **DSH 0.2.2-rc.1 和 0.2.2-rc.3**。本次适配 rc.3 宿主，保留 1.1.2 的冻结参数修复、失败标志、工程配置检查、串口诊断、交互命令和日志脱敏。详见 [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md)和[完整更新日志](CHANGELOG.md)。npm 尚未发布，请按下文使用源码或本地打包安装。
 
 > 软件检查与设备业务分别验收：当前软件测试及目标 DSH 宿主服务验证通过，**园区现场业务总验收仍为 FAIL**。冷 ARP 丢包、端到端吞吐瓶颈及指定 S5700 固件的 TCP 隔离问题仍待解决。见[验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md)和[已知问题](docs/KNOWN-ISSUES.zh-CN.md)。
 
@@ -30,8 +30,8 @@
 | 项目 | 当前要求与已验证范围 |
 | --- | --- |
 | Node.js | 20 及以上；源码安装使用 npm 和锁文件 |
-| DSH 插件 | DSH **0.2.2-rc.1**；其他宿主版本需另行核验 |
-| Node 依赖 | `@deepseek-ai/dsh-tools@0.2.2-rc.1`、`@deepseek-ai/schemastery@3.19.0` |
+| DSH 插件 | DSH **0.2.2-rc.1、0.2.2-rc.3**；其他宿主版本需另行核验 |
+| Node 依赖 | `@deepseek-ai/dsh-tools` 仅接受上述两个版本；锁文件使用 rc.3；`@deepseek-ai/schemastery@3.19.0` |
 | MCP / CLI | 独立运行，无需启动 DSH；仍需安装本包的 Node 依赖 |
 | GUI 自动化 | Windows 交互桌面、eNSP、Python、pywin32、Pillow，以及匹配的权限 |
 | Word 报告 | 文档解释器安装 python-docx |
@@ -51,7 +51,7 @@ node bin/dsh-ensp-mcp.mjs --version
 node bin/ensp-fusion.mjs tools
 ```
 
-当前版本应显示 `1.1.1`，`tools` 应列出 16 项及其参数 schema。这两条检查命令不会启动 eNSP。
+当前版本应显示 `1.1.3`，`tools` 应列出 19 项及其参数 schema。这两条检查命令不会启动 eNSP。
 
 ### 2. 生成第一个拓扑
 
@@ -71,10 +71,10 @@ node bin/ensp-fusion.mjs call ensp_build examples/build-router-pair.json $Worksp
 **DSH 插件**：在源码根目录运行 `npm pack --ignore-scripts`，然后将生成的包安装到实际使用的 profile。以下以 `desktop` 为例：
 
 ```powershell
-dsh plugin --profile desktop add "C:/tools/dsh-ensp-fusion/dsh-ensp-fusion-1.1.1.tgz"
+dsh plugin --profile desktop add "C:/tools/dsh-ensp-fusion/dsh-ensp-fusion-1.1.3.tgz"
 ```
 
-替换为实际包路径。首次接入还需按[DSH 配置说明](docs/DEPLOYMENT.zh-CN.md#4-dsh接入)合并 bundle；升级后重新加载插件。若仍提示 1.1.0 不兼容，检查实际加载路径和旧包缓存。不要继续使用旧 `v1.1.0` 标签的安装包。
+替换为实际包路径。首次接入还需按[DSH 配置说明](docs/DEPLOYMENT.zh-CN.md#4-dsh接入)合并 bundle；升级后重新加载插件。DSH rc.3 会拒绝旧 1.1.2 的 rc.1 单版本声明；若仍显示旧版，检查实际加载路径和缓存，并通过 `ensp_status` 核对版本、构建指纹及加载时间。
 
 **MCP 客户端**：按客户端要求合并配置，替换代码目录与实验目录：
 
@@ -106,7 +106,7 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 
 这些命令映射到源码 `bin/` 中的对应入口；直接从源码运行时使用 `node bin/<入口文件>`。各入口支持 `--help`。
 
-## 16 个统一工具
+## 19 个统一工具
 
 | 工具 | 作用 | 使用要点 |
 | --- | --- | --- |
@@ -126,12 +126,15 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 | `ensp_capture` | 批量开窗、只读回显与截图取证 | 按只读命令计划执行 |
 | `ensp_ref` | 提取参考文档信息 | 使用前核对来源和适用条件 |
 | `ensp_doc` | 生成带图文或基于模板的 Word 报告 | 需要 Python 文档依赖 |
+| `ensp_project` | 核对工程配置内容、创建检查点和对比磁盘资产 | 检查点不含 VM 磁盘；不证明重开加载 |
+| `ensp_console_diagnose` | 单次控制台探测、按 UUID 关联串口与同步日志 | 只读诊断，不自动重启、不把 `#` 当 VRP |
+| `ensp_logexport` | 从 JSONL/连续 Zstandard 会话生成脱敏副本 | 原日志不改写；Zstandard 需 Node 22.15+ |
 
 通用构建器支持 **12 种型号**：S5700、S3700、AR2220、AR2240、AR1220、USG5500、USG6000V、AC6005、PC、Client、Server、Cloud。设备名使用 ASCII 标识符。Client/Server 支持原生 Ethernet 及 IPv4/DNS 启动参数；应用服务目录和启动状态需单独恢复、检查。
 
 ## 验证结果与已知限制
 
-2026-11-12，1.1.1 的验证结果：
+2026-11-13 的代码修复及现场边界见 [1.1.2 说明](docs/releases/1.1.2.zh-CN.md)。以下为 2026-11-12、1.1.1 的历史验证结果，不能替代当前工程验收：
 
 | 层次 | 结果 | 已覆盖范围 |
 | --- | --- | --- |
@@ -142,6 +145,8 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 | 园区业务总验收 | **FAIL** | 冷 ARP、端到端吞吐及指定固件 TCP 隔离仍有失败 |
 
 宿主验证在独立进程调用已安装 DSH 的真实服务，不修改用户 profile，也不覆盖完整桌面模型会话。USG 已测两轮 0.5/2/8 Mbps、1/8/32 UDP 流，入口/出口样本零丢包；外侧终端约 1.94 Mbps 的瓶颈尚未定位。此结果不能推断最大吞吐、TCP 并发或长时间稳定性。
+
+2026-11-14 已完成三台 USG 的真实 VRP、配置恢复、设备保存及同路径工程关闭重开验收：重开后 current/saved 关键项分别 39/39/23 全部匹配，财务墙从原生导出的 `fwcw.cfg` 成功加载。源码另修复尾随 sysinfo ZIP 和自定义 `.cfg` 检查假阴性，308 项 Node 测试、24 项 MCP 冒烟通过；桌面安装副本尚未包含这两项新修复。此配置验收不代替园区业务与长时间稳定性，详见[本轮验收记录](docs/USG-REOPEN-ACCEPTANCE-20261114.zh-CN.md)。
 
 部署前还需了解：
 
@@ -188,7 +193,7 @@ npm run check:dsh -- --app "C:/path/to/DeepSeek Harness.exe"
 
 | 文档 | 内容 |
 | --- | --- |
-| [1.1.1 更新说明](docs/releases/1.1.1.zh-CN.md) / [更新日志](CHANGELOG.md) | 兼容性修复、升级及历史变更 |
+| [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md) / [更新日志](CHANGELOG.md) | DSH rc.3 兼容修复、升级及历史变更 |
 | [部署手册](docs/DEPLOYMENT.zh-CN.md) | DSH/MCP/CLI 接入、依赖与排错 |
 | [统一验收](docs/ACCEPTANCE-RUNNER.zh-CN.md) / [变更管理](docs/CHANGE-MANAGEMENT.zh-CN.md) | 计划、断言、日志和恢复 |
 | [验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md) / [已知问题](docs/KNOWN-ISSUES.zh-CN.md) | 成功范围、失败项和未测项 |

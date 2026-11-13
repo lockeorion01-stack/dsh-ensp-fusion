@@ -1086,6 +1086,35 @@ def _close_project_window(hwnd, save="ask", timeout=8, dialog_hwnd=None):
     return {"ok": False, "confirmed": False, "decision": acted, "error": "window did not close before timeout"}
 
 
+def dialog_decision(hwnd, dialog_hwnd, decision, timeout=8):
+    """Act once on an inspected native save prompt and verify disappearance.
+
+    This proves only dialog closure, never project persistence or project load.
+    """
+    if decision not in ("save", "discard", "cancel"):
+        raise ValueError("decision must be save, discard, or cancel")
+    candidates = [d for d in owned_dialogs(hwnd) if d["hwnd"] == dialog_hwnd]
+    if len(candidates) != 1:
+        raise RuntimeError("inspected dialog is stale or not owned by this eNSP window")
+    dialog = candidates[0]
+    buttons = sorted([c for c in children(dialog_hwnd, 1)
+                      if c["cls"] == "Button" and c["visible"]], key=lambda c: c["rect"][0])
+    ids = [win32gui.GetDlgCtrlID(c["hwnd"]) for c in buttons]
+    if dialog["title"] != "eNSP" or len(buttons) != 3 or ids not in ([6, 7, 2], [1310, 1308, 1352]):
+        return {"ok": False, "confirmed": False, "error": "unknown dialog; no decision sent", "button_ids": ids}
+    selected = buttons[{"save": 0, "discard": 1, "cancel": 2}[decision]]
+    win32gui.PostMessage(dialog_hwnd, win32con.WM_COMMAND,
+                         win32gui.GetDlgCtrlID(selected["hwnd"]), selected["hwnd"])
+    deadline = time.monotonic() + min(max(float(timeout), 0.1), 60)
+    while time.monotonic() < deadline:
+        if not window_exists(dialog_hwnd) or not win32gui.IsWindowVisible(dialog_hwnd):
+            return {"confirmed": True, "decision": decision, "scope": "dialog disappeared only",
+                    "projectPersistenceVerified": False, "projectLoadVerified": False}
+        time.sleep(0.1)
+    return {"ok": False, "confirmed": False, "decision": decision,
+            "error": "decision posted but dialog remains; inspect state before retrying"}
+
+
 def send_text(hwnd, text):
     win32gui.SendMessage(hwnd, win32con.WM_SETTEXT, 0, text)
     return {"hwnd": int(hwnd), "text": text}
@@ -1207,12 +1236,12 @@ def process_executable(pid):
         _close_handle(handle)
 
 
-def _ensp_owned_windows(cls_matches, include_pc_services=False):
+def _ensp_owned_windows(cls_matches, include_pc_services=False, visible_only=True):
     # Cache only for this enumeration: eNSP creates new processes per topology,
     # and Windows can reuse PIDs. Class names and titles do not identify eNSP.
     owned = {}
     rows = []
-    windows = enum_windows(None, True)
+    windows = enum_windows(None, visible_only)
     def image(pid):
         if pid not in owned:
             try:
@@ -1241,6 +1270,37 @@ def _ensp_owned_windows(cls_matches, include_pc_services=False):
 def ensp_windows():
     """Visible eNSP main windows, verified by their owning process executable."""
     return _ensp_owned_windows(lambda cls: cls.lower().startswith("afx:"))
+
+
+def ensp_inventory():
+    """Process evidence is independent of a visible main window."""
+    windows = _ensp_owned_windows(lambda cls: cls.lower().startswith("afx:"), visible_only=False)
+    processes = []
+    errors = []
+    uninspected = 0
+    try:
+        pids = win32process.EnumProcesses()
+        for pid in pids:
+            if not pid:
+                continue
+            try:
+                image = process_executable(pid)
+                if image and ntpath.basename(image).lower() == "ensp_client.exe":
+                    processes.append({"pid": int(pid), "exe": image, "running": True})
+                elif not image:
+                    uninspected += 1
+            except OSError:
+                uninspected += 1  # Could be protected or exiting; do not claim exhaustive absence.
+    except Exception as exc:
+        errors.append("process enumeration unavailable: %s" % type(exc).__name__)
+    for window in windows:
+        window["dialogs"] = owned_dialogs(window["hwnd"])
+        window["enabled"] = bool(win32gui.IsWindowEnabled(window["hwnd"]))
+        window["hung"] = bool(user32.IsHungAppWindow(window["hwnd"]))
+    return {"processes": processes, "main_windows": windows,
+            "process_scan_complete": not errors and uninspected == 0,
+            "uninspected_process_count": uninspected, "errors": errors,
+            "active_project": {"state": "unknown", "verified": False}}
 
 
 def ensp_main():
@@ -1516,6 +1576,7 @@ def dispatch(op, args):
     if op == "ensp":
         wins = ensp_windows()
         return {"windows": wins, "devices": device_windows(),
+                "inventory": ensp_inventory(),
                 "canvases": [{"main": w["hwnd"], "view": canvas_view(w["hwnd"])} for w in wins],
                 "anchors": [{"main": w["hwnd"], "items": canvas_anchors(w["hwnd"])}
                             for w in wins]}
@@ -1599,6 +1660,8 @@ def dispatch(op, args):
         return close_window(hwnd)
     if op == "close_project":
         return close_project(resolve_target(args), args.get("save", "ask"), args.get("timeout", 8), args.get("dialog_hwnd"))
+    if op == "dialog_decision":
+        return dialog_decision(resolve_target(args), int(args["dialog_hwnd"]), args["decision"], args.get("timeout", 8))
     if op == "device_control":
         return control_devices(resolve_target(args), args["toolbar"])
     if op == "start_devices":

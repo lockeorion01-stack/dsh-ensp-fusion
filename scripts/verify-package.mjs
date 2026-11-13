@@ -16,7 +16,7 @@ try{
   const pkg=join(temp,'package')
   await writeFile(join(pkg,'package-lock.json'),await readFile(resolve(root,'package-lock.json')))
   run(npm,['ci','--ignore-scripts','--offline','--no-audit'],pkg)
-  const tools=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'tools'],temp));assert.equal(tools.length,16)
+  const tools=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'tools'],temp));assert.equal(tools.length,19)
   await mkdir(join(temp,'lab'))
   const result=JSON.parse(run(process.execPath,[join(pkg,'bin/ensp-fusion.mjs'),'call','ensp_build',join(pkg,'examples/build-router-pair.json'),join(temp,'lab')],temp));assert.equal(result.ok,true)
   const xml=await readFile(join(temp,'lab/router-pair.topo'),'utf8');assert.ok(xml.includes('name="R1"'))
@@ -34,6 +34,6 @@ try{
   const requests=[{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18'}},{jsonrpc:'2.0',id:2,method:'tools/list'}]
   const wire=spawnSync(process.execPath,[join(pkg,'bin/dsh-ensp-mcp.mjs'),'--workspace',join(temp,'lab')],{encoding:'utf8',input:requests.map(r=>JSON.stringify(r)).join('\n')+'\n',timeout:10000,windowsHide:true})
   assert.equal(wire.status,0,wire.stderr)
-  const replies=wire.stdout.trim().split('\n').map(line=>JSON.parse(line));assert.equal(replies.length,2);assert.equal(replies[0].result.serverInfo.name,'dsh-ensp-fusion');assert.equal(replies[1].result.tools.length,16)
+  const replies=wire.stdout.trim().split('\n').map(line=>JSON.parse(line));assert.equal(replies.length,2);assert.equal(replies[0].result.serverInfo.name,'dsh-ensp-fusion');assert.equal(replies[1].result.tools.length,19)
   console.log(JSON.stringify({ok:true,files:metadata.files.length,packedBytes:metadata.size,unpackedBytes:metadata.unpackedSize,toolCount:tools.length,checks:['licenses and release documentation','offline clean install','CLI external cwd','topology generation','packaged acceptance runner','packaged business evidence assessment','packaged interrupted recovery module','native Client Ethernet and DNS','doctor help','MCP stdio initialize/list']},null,2))
 }finally{await rm(temp,{recursive:true,force:true})}

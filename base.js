@@ -16,6 +16,9 @@ import { prepareCliEntries } from './lib/cli-plan.js'
 import { readRecoveryPlan, listChangeJournals } from './lib/change-journal.js'
 import { createRedactor, credentialValues, redactValue } from './lib/redaction.js'
 import { waitDevicesReady } from './lib/device-ready.js'
+import { buildInfo } from './lib/build-info.js'
+import { hydrateInputs } from './lib/credential-input.js'
+import { normalizeGuiSteps, GUI_STEP_SCHEMA } from './lib/gui-contract.js'
 import { validateLabPlan, runLabTest, renderLabReports } from './lib/lab-test.js'
 import {
   describeDevices, parseTopo, readTopo, renameDevice, renumberComPorts,
@@ -74,9 +77,9 @@ ENSPLB 增强：ensp_cli 批次整体预校验后顺序执行，失败默认跳�
 - **参考文档（题目 docx / 课件 pptx）只当线索**：小错（命令语法、视图、显示命令名）用设备接受的写法继续做，并在交付里注明；大错（拓扑或地址规划矛盾、关键步骤缺失、策略方向相反）停下来告诉用户，不要臆造方案。
 - 防火墙（USG6000V）可能起不来或控制台无回显；遇到就告知用户并继续其余部分，不要卡住。
 - 将要接管鼠标（真实点击/拖拽）前必须提醒用户，并说明会还原鼠标位置。
-- 交付时列出本次实验改动过的所有密码，以及当前生效的账号/密码对照表（明文写在文档末尾和回复里）。
+- 凭据默认不出现在普通报告或回复中。优先 credential_file/credential_ref 和 commands_file，本地凭据文件不得入库；仅在用户明确要求敏感交付时单独处理。插件不能撤回宿主已经记录的明文输入日志，使用 ensp_logexport 导出脱敏副本。
 - **配置要落盘**：实验结束时每台被配置过的设备都必须 \`save\`（\`ensp_cli\` 在改配置时会自动保存，返回值里的 \`saved\` 字段会说明是否成功）。只有用户明确提出"不用保存/临时实验"时才传 \`save:false\`。收尾时逐台核对 \`saved.ok\`，别把"没存盘"的实验交给用户。
-- **保存拓扑**：设备 \`save\` 只写进设备 flash，配置能不能跟着 \`.topo\` 走取决于 eNSP 有没有保存拓扑。实验结束时用 \`ensp_gui\` 给主窗口发一次 Ctrl+S，再用拓扑目录里 \`vrpcfg.cfg\`/\`flash.efz\` 的大小和时间戳确认回写；不按的话重开拓扑会回到初始配置（实测）。
+- **保存拓扑**：设备 \`save\` 与工程回写分开核验。给已核对的主窗口发送 Ctrl+S 后，用 ensp_project 检查配置内容及 expected 基线并创建独立 checkpoint；大小、时间戳与消息投递都不能证明保存或冷启动成功。open/explore/spawn 只返回 dispatched，需另行观察实际加载与重开后的 CLI 基线。
 - **少抢前台、少弹窗口**：telnet 和主窗口截图都不需要 eNSP 在前台，默认就别激活、别前置。只有两种情况需要把窗口拿到前台：截设备命令行窗口（必须先双击图标打开并抢到前台）和点非客户区（工具栏/菜单）。用完可以用 \`{op:"close_console",device:"SWX"}\` 收掉设备窗口，保持用户桌面干净。
 
 行为要点（已实测，别再踩）：
@@ -477,6 +480,8 @@ function createTools(config, bridge) {
         properties: {
           workspaceRoot: { type: 'string', required: true },
           bridge: { type: 'object', additionalProperties: true, required: true },
+          build: { type: 'object', additionalProperties: true },
+          runtime: { type: 'object', additionalProperties: true },
           instances: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           installed: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           deviceWindows: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
@@ -495,6 +500,7 @@ function createTools(config, bridge) {
       let bridgeInfo = { available: false, error: 'bridge not started' }
       let instances = []
       let deviceWindows = []
+      let runtime = { processes: [], process_scan_complete: false, active_project: { state: 'unknown', verified: false } }
       try {
         const probeStarted = Date.now()
         const batch = await bridge.steps(steps)
@@ -508,9 +514,10 @@ function createTools(config, bridge) {
           elapsedMs: Date.now() - probeStarted,
         }
         const payload = batch.steps[1] ?? {}
-        instances = (payload.windows ?? []).map((w) => ({
+        runtime = payload.inventory ?? runtime
+        instances = (runtime.main_windows ?? payload.windows ?? []).map((w) => ({
           hwnd: w.hwnd, pid: w.pid, rect: w.rect, minimized: w.minimized,
-          title: w.title, cls: w.cls,
+          title: w.title, cls: w.cls, visible: w.visible, enabled: w.enabled, hung: w.hung, dialogs: w.dialogs,
         }))
         deviceWindows = (payload.devices ?? []).map((w) => ({ hwnd: w.hwnd, title: w.title, rect: w.rect }))
         for (const [index, entry] of installed.entries()) {
@@ -519,7 +526,9 @@ function createTools(config, bridge) {
           if (info?.exe?.modified) entry.modified = info.exe.modified
         }
         if (instances.length === 0) {
-          notes.push('没有发现已打开的 eNSP 窗口：可以用 ensp_gui 的 {op:"explore",path:"…eNSP_Client.exe"} 拉起，或先问用户想用哪个版本。')
+          notes.push(runtime.processes.length || !runtime.process_scan_complete
+            ? '没有可识别的主窗口，但进程仍在或进程检查不完整；先检查隐藏窗口与模态阻塞，不要直接启动第二实例。'
+            : '进程检查未发现 eNSP 客户端；启动前确认目标版本和工程。')
         }
         if (instances.some((item) => item.minimized)) {
           notes.push('eNSP 主窗口当前是最小化的：截图（窗口 DC）不受影响，但真实点击/双击图标前工具会自动把它还原到前台（最小化窗口的坐标是 -32000，全是废值）。')
@@ -541,6 +550,7 @@ function createTools(config, bridge) {
         const parsed = await readTopo(path)
         topology = {
           path,
+          provenance: 'disk-file', activeProjectVerified: false,
           version: parsed.version,
           devices: describeDevices(parsed),
           annotations: parsed.annotations,
@@ -556,6 +566,7 @@ function createTools(config, bridge) {
 
       return lossless({
         workspaceRoot: sessionWorkspace(exec),
+        build: buildInfo(), runtime,
         bridge: bridgeInfo,
         instances,
         installed,
@@ -575,7 +586,7 @@ function createTools(config, bridge) {
         type: 'array',
         required: true,
         description: 'Ordered steps. Raw steps use bridge op names and arguments (e.g. {"op":"postclick","hwnd":123,"x":10,"y":20}). Convenience steps take {op:"open_console", device:"SW1"} (needs topology_path), {op:"close_console", device:"SW1"}, {op:"start_all"}, {op:"stop_all"}.',
-        items: { type: 'object', additionalProperties: true },
+        items: GUI_STEP_SCHEMA,
       },
       topology_path: { type: 'string', description: 'Needed by open_console / device_window / start_all to map device names to canvas coordinates.' },
       icon_offset: { type: 'array', items: { type: 'integer' }, description: 'Force one icon hit offset [dx, dy] for open_console instead of the built-in retry spiral.' },
@@ -585,6 +596,7 @@ function createTools(config, bridge) {
       stop_wait_ms: { type: 'integer', description: 'How long stop_all waits for console ports to close; defaults to 12000.' },
       ready_wait_ms: { type: 'integer', description: 'Budget for prompt plus display version readiness after start_all; defaults to 240000 for USG topologies, otherwise 120000. A timeout is not device readiness.' },
       ready_devices: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Optional [{device,username?,password?}] for readiness probes. No password changes are performed.' },
+      credential_file: { type: 'string', description: 'Local credential JSON; ready_devices[].credential_ref selects entries without inline passwords.' },
     },
     output: {
       schema: {
@@ -597,13 +609,19 @@ function createTools(config, bridge) {
           elapsedMs: { type: 'integer', required: true },
           requiresCursorTakeover: { type: 'boolean', required: true },
           notes: { type: 'array', items: { type: 'string' }, required: true },
+          outcome: { type: 'object', additionalProperties: true },
         },
       },
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
       if (!Array.isArray(args.steps) || args.steps.length === 0) throw new Error('steps must be a non-empty array')
-      for (const step of args.steps) {
+      args = await hydrateInputs(args, (path, kind) => resolveWorkspacePath(path, exec, config, { mustExist: true, kind }))
+      // DSH's tool pipeline deep-freezes model arguments before invoking a
+      // definition. Keep the validated caller snapshot immutable and normalize
+      // paths on plugin-owned step records instead.
+      const guiSteps = normalizeGuiSteps(args.steps, args.timeout_ms ?? config.timeoutMs)
+      for (const step of guiSteps) {
         if (!step || typeof step !== 'object' || typeof step.op !== 'string') throw new Error('each GUI step requires op')
         if (step.op === 'select_tab' && (!Number.isInteger(step.index) || step.index < 0)) throw new Error('select_tab index must be a nonnegative integer')
         if (step.op === 'select_list') {
@@ -638,7 +656,7 @@ function createTools(config, bridge) {
         readyCredentials.set(key, { username: entry.username, password: entry.password })
       }
       // Validate the whole batch before any GUI action, including raw open.
-      for (const step of args.steps) {
+      for (const step of guiSteps) {
         if (step.op === 'open' && typeof step.path === 'string' && extname(step.path).toLowerCase() === '.topo') {
           const path = await resolveWorkspacePath(step.path, exec, config, { mustExist: true, kind: 'topology_path' })
           const topology = await readTopo(path)
@@ -656,10 +674,10 @@ function createTools(config, bridge) {
         validateTopoConsolePorts(topology.text)
         // A damaged endpoint must not prevent stopping an existing session or
         // collecting evidence. Guard only operations that may launch it.
-        if(args.steps.some(s=>['start_all','open_console','device_window','device_click'].includes(s.op)))validateNativeEndpointSettings(topology.text)
+        if(guiSteps.some(s=>['start_all','open_console','device_window','device_click'].includes(s.op)))validateNativeEndpointSettings(topology.text)
         devices = topology.devices
       }
-      if (args.steps.some(step => ['start_all', 'stop_all'].includes(step.op)) && !devices?.some(device => device.comPort > 0)) {
+      if (guiSteps.some(step => ['start_all', 'stop_all'].includes(step.op)) && !devices?.some(device => device.comPort > 0)) {
         throw new Error('start_all/stop_all require topology_path with assigned console ports for verified operation')
       }
       for (const key of readyCredentials.keys()) {
@@ -678,7 +696,9 @@ function createTools(config, bridge) {
           batchResult = { steps: [{ op: 'bridge_transport', ok: false, error: error.message,
             uncertain: true, message: 'Do not replay; inspect actual device and window state.' }] }
         }
-        for (const step of batchResult.steps) results.push({ ...step, index: results.length })
+        for (const step of batchResult.steps) results.push({ ...step, index: results.length,
+          ...(['open', 'explore', 'spawn', 'bmclick', 'postclick', 'posttext', 'key', 'type', 'paste', 'settext'].includes(step.op)
+            ? { completion: 'dispatched', postconditionVerified: false } : {}) })
         if (batchResult.steps.some(step => step.ok === false)) halted = true
         if (batchResult.steps.length < steps.length) results.push({ index: results.length, op: 'skipped',
           ok: false, skipped: steps.slice(batchResult.steps.length).map(s => s.op), error: 'preceding GUI step failed' })
@@ -691,7 +711,7 @@ function createTools(config, bridge) {
         if (!halted) await run(batch)
       }
 
-      for (const step of args.steps) {
+      for (const step of guiSteps) {
         const op = String(step.op ?? '')
         if (halted) {
           results.push({ index: results.length, op, ok: false, skipped: true, error: 'preceding GUI step failed' })
@@ -830,6 +850,9 @@ function createTools(config, bridge) {
       return lossless({
         transport: bridge.serving?.healthy ? 'serve' : 'job',
         ok: failures.length === 0,
+        outcome: { execution: failures.length ? 'failed' : 'completed',
+          taskVerified: false,
+          scope: 'GUI operation evidence only. Inspect per-step postconditions; project load, persistence and business require independent verification.' },
         steps: results,
         elapsedMs: Date.now() - started,
         requiresCursorTakeover: needsCursor,
@@ -1057,7 +1080,14 @@ function createTools(config, bridge) {
     name: 'ensp_cli',
     description: 'Send commands to a started eNSP device over its console telnet port (com_port from the .topo) and return the cleaned transcript. Optionally echo the same commands into the device CLI window and screenshot it, which is what lab reports need.',
     parameters: {
-      commands: { type: 'array', items: { type: 'string' }, description: 'VRP commands in order, without the trailing newline. Required unless devices[] is used.' },
+      commands: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: false, properties: {
+        cmd: { type: 'string', required: true }, expect: { type: 'json' },
+        expected_view: { type: 'string', description: 'user, configuration, or exact VRP prompt; checked before sending.' },
+        replies: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { expect: { type: 'string', required: true }, reply: { type: 'string', required: true } } }, description: 'Explicit literal prompt-tail/reply pairs; no blind answers.' },
+      } }] }, description: 'Ordered strings or {cmd,expect?,expected_view?,replies?}. Required unless devices[] or commands_file is used.' },
+      commands_file: { type: 'string', description: 'Workspace JSON command array. Prefer for configuration containing secrets; cannot combine with commands.' },
+      credential_file: { type: 'string', description: 'Workspace-local JSON keyed by credential_ref; references avoid plaintext secrets in host call logs. Also applies to devices[].' },
+      credential_ref: { type: 'string', description: 'Entry name in credential_file; cannot combine with inline credentials.' },
       expect: {
         type: 'array',
         description: 'Optional assertions, index-aligned with commands: expect[i] must appear in commands[i]\'s output (a value may be one pattern or an array of patterns that must all match; case-insensitive substring, write /regex/ for a pattern). The reply carries checks[] per asserted command plus one ok flag, so you do not have to eyeball the transcript.',
@@ -1140,6 +1170,7 @@ function createTools(config, bridge) {
       const topologyDevices = args.topology_path
         ? (await readTopo(await resolveWorkspacePath(args.topology_path, exec, config, { mustExist: true, kind: 'topology_path' }))).devices
         : null
+      args = await hydrateInputs(args, (path, kind) => resolveWorkspacePath(path, exec, config, { mustExist: true, kind }))
       const entries = prepareCliEntries(args, topologyDevices)
       if (entries.some(entry => entry.recovery_commands) && !args.change_dir) throw new Error('recovery_commands requires change_dir')
       const changeRoot = args.change_dir === undefined ? null : await resolveWorkspacePath(args.change_dir, exec, config, { kind: 'change_dir' })
@@ -1222,7 +1253,7 @@ function createTools(config, bridge) {
     name: 'ensp_labtest',
     description: 'Run a JSON acceptance plan using read-only display/ping/tracert commands and explicit assertions; write Markdown, CSV and JSON evidence reports. Every device is checked, including after failures.',
     parameters: {
-      plan_path: { type: 'string', required: true, description: 'JSON plan inside workspace: {title?, topology_path?, devices:[{device?,port?,commands:[{cmd,expect,layer?}]}]}.' },
+      plan_path: { type: 'string', required: true, description: 'JSON plan: topology_path is relative to the plan directory by default; topology_base:"workspace" selects workspace. layer values: configuration/interface/routing/connectivity. devices:[{device?,port?,commands:[{cmd,expect,layer?}]}].' },
       report_prefix: { type: 'string', required: true, description: 'Workspace-relative filename prefix; produces .md, .csv and .json.' },
       allow_overwrite: { type: 'boolean', description: 'Overwrite existing report files; defaults to false.' },
     },
@@ -1230,10 +1261,10 @@ function createTools(config, bridge) {
     async execute(args, exec) {
       if (typeof args.report_prefix !== 'string' || !args.report_prefix.trim()) throw new Error('report_prefix must be a non-empty string')
       const planPath = await resolveWorkspacePath(args.plan_path, exec, config, { mustExist: true, kind: 'plan_path' })
-      const plan = JSON.parse(await readFile(planPath, 'utf8'))
+      const plan = await hydrateInputs(JSON.parse(await readFile(planPath, 'utf8')), (path, kind) => resolveWorkspacePath(resolve(dirname(planPath), path), exec, config, { mustExist: true, kind }))
       validateLabPlan(plan)
       const devices = plan.topology_path
-        ? (await readTopo(await resolveWorkspacePath(resolve(dirname(planPath), plan.topology_path), exec, config, { mustExist: true, kind: 'topology_path' }))).devices
+        ? (await readTopo(await resolveWorkspacePath(resolve(plan.topology_base === 'workspace' ? sessionWorkspace(exec) : dirname(planPath), plan.topology_path), exec, config, { mustExist: true, kind: 'topology_path (resolved from topology_base; use workspace or plan)' }))).devices
         : null
       const prepared = prepareCliEntries({ devices: plan.devices }, devices)
       // Check every path before opening a console connection.
@@ -1404,7 +1435,7 @@ function createTools(config, bridge) {
 
   tools.push(defineTool({
     name: 'ensp_doc',
-    description: 'Build the two lab deliverables from a screenshot manifest: a captioned report (one short sentence under each screenshot) and a bare copy (screenshots only, no prose), plus the plaintext credential table. Pass template_path to make the bare copy out of the teacher\'s original .docx: its text, numbering and layout stay untouched and each section\'s screenshots go into the blank paragraphs after that step.',
+    description: 'Build captioned and bare screenshot lab reports. Credentials are redacted by default; plaintext requires include_sensitive_credentials:true after an explicit user request. Pass template_path to preserve the original task layout.',
     parameters: {
       title: { type: 'string', required: true, description: 'Report title, usually the lab task name.' },
       output_dir: { type: 'string', required: true, description: 'Directory inside the workspace for the .docx files.' },
@@ -1417,6 +1448,7 @@ function createTools(config, bridge) {
       template_path: { type: 'string', description: 'Original task .docx for the bare copy. Its paragraphs are preserved byte for byte; screenshots fill the blank lines under each 步骤N.' },
       subtitle: { type: 'string', description: 'Line under the title (name / class / date).' },
       credentials: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Password table rows: {item, value}.' },
+      include_sensitive_credentials: { type: 'boolean', description: 'Default false: mask credential table values. Set true only for a user-requested sensitive deliverable; inline input can still be recorded by the host.' },
       notes: { type: 'array', items: { type: 'string' }, description: 'Closing notes (captioned copy only).' },
       file_stem: { type: 'string', description: 'Base file name; defaults to the sanitized title.' },
       verify: { type: 'boolean', description: 'Compare the bare copy against template_path (paragraphs / non-empty text / pictures) and return verification; defaults to true when template_path is given.' },
@@ -1467,7 +1499,7 @@ function createTools(config, bridge) {
       const manifestBase = {
         title: args.title,
         subtitle: args.subtitle,
-        credentials: args.credentials,
+        credentials: args.credentials?.map(row => ({ item: String(row.item ?? ''), value: args.include_sensitive_credentials === true ? String(row.value ?? '') : '[REDACTED]' })),
         notes: args.notes,
         sections,
       }

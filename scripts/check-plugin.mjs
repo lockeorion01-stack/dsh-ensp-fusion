@@ -19,6 +19,7 @@ await check('package entrypoints and lockfile', async () => {
   const lock = JSON.parse(await readFile(join(root,'package-lock.json'),'utf8'))
   assert.equal(lock.name,pkg.name); assert.equal(lock.version,pkg.version)
   assert.deepEqual(lock.packages[''].peerDependencies,pkg.peerDependencies)
+  for (const field of ['dependencies', 'devDependencies']) assert.deepEqual(lock.packages[''][field], pkg[field], `lockfile ${field}`)
   for (const path of [...Object.values(pkg.exports),...Object.values(pkg.bin),pkg.dsh.bundle.patch]) await access(join(root,path))
   for (const key of Object.keys(pkg.exports)) await import(key==='.'?pkg.name:`${pkg.name}/${key.slice(2)}`)
   return {name:pkg.name,version:pkg.version,exports:Object.keys(pkg.exports),bins:Object.keys(pkg.bin)}
@@ -26,7 +27,7 @@ await check('package entrypoints and lockfile', async () => {
 await check('DSH registration contract', async () => {
   const tools=[],skills=[],sections=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:(...s)=>sections.push(s)}},Config({}))
-  assert.equal(tools.length,16);assert.equal(new Set(tools.map(t=>t.name)).size,16)
+  assert.equal(tools.length,19);assert.equal(new Set(tools.map(t=>t.name)).size,19)
   assert.equal(skills.length,2);assert.ok(sections.length)
   for(const skill of skills){assert.ok(skill.content);await access(skill.resourceBase.path)}
   const patch = await readFile(join(root,pkg.dsh.bundle.patch),'utf8')

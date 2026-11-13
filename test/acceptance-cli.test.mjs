@@ -22,9 +22,9 @@ test('CLI USG resource assessment fails incomplete evidence and never claims cap
 const build={name:'build',tool:'ensp_build',args:{output_path:'new.topo',devices:[{name:'SW',model:'S5700'}]}}
 test('CLI preflight prevents an earlier mutation when a later tool argument is malformed',async t=>{
  const root=await workspace(t),file=join(root,'plan.json')
- await writeFile(file,JSON.stringify({version:1,deadline_ms:20000,steps:[build,{name:'bad',tool:'ensp_cli',args:{port:9500,commands:[{cmd:'display version'}]}}]}))
+ await writeFile(file,JSON.stringify({version:1,deadline_ms:20000,steps:[build,{name:'bad',tool:'ensp_cli',args:{port:9500,commands:[{cmd:42}]}}]}))
  const r=spawnSync(process.execPath,[cli,'run',file,root],{encoding:'utf8',windowsHide:true})
- assert.equal(r.status,1);assert.match(r.stderr,/expected string/u);await assert.rejects(access(join(root,'new.topo')))
+ assert.equal(r.status,1);assert.match(r.stderr,/commands|expected string|oneOf/u);await assert.rejects(access(join(root,'new.topo')))
 })
 test('real CLI preserves the failed step and invokes armed cleanup after a successful file action',async t=>{
  const root=await workspace(t),file=join(root,'plan.json')

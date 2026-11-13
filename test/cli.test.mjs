@@ -5,6 +5,34 @@ import test from 'node:test'
 
 import { VrpSession } from '../lib/cli.js'
 
+test('explicit multi-round RSA replies match literal prompt tails without speculative answers', async t => {
+  const { session } = await fixture(t, [
+    ['', '<SW1>'], ['rsa local-key-pair create', 'Input modulus [default = 512]:'],
+    ['2048', 'Please enter confirmation code:'], ['Synthetic-Reply!', 'Synthetic-Reply!\nKey created\n<SW1>'],
+  ])
+  await session.open()
+  const out = await session.command('rsa local-key-pair create', { expectedView: 'user', replies: [
+    { expect: 'Input modulus [default = 512]:', reply: '2048' }, { expect: 'Please enter confirmation code:', reply: 'Synthetic-Reply!' },
+  ] })
+  assert.equal(out.ok, true); assert.match(out.output, /Key created/u)
+  assert(!session.redact(out.output).includes('Synthetic-Reply!'))
+})
+
+test('unknown interactive prompt stops batch and mismatched reply is never sent', async t => {
+  const { session } = await fixture(t, [['', '<SW1>'], ['rsa local-key-pair create', 'Input modulus [default = 512]:']])
+  await session.open()
+  const r = await session.run(['rsa local-key-pair create', 'vlan 999'], { commandOptions: [{ replies: [{ expect: 'different prompt:', reply: '2048' }] }] })
+  assert.equal(r.ok, false); assert.equal(r.failure.kind, 'input_required'); assert.deepEqual(r.skipped, ['vlan 999'])
+})
+
+test('system-view is restored after return and explicit view precondition blocks a wrong context', async t => {
+  const { session } = await fixture(t, [['', '<SW1>'], ['system-view', '[SW1]'], ['return', '<SW1>'], ['system-view', '[SW1]'], ['vlan 10', '[SW1-vlan10]']])
+  await session.open()
+  const r = await session.run(['return', 'vlan 10'], { systemView: true })
+  assert.equal(r.ok, true); assert.equal(r.setupResults.length, 2)
+  await assert.rejects(session.command('vlan 20', { expectedView: 'user' }), e => e.kind === 'view_required')
+})
+
 // Every peer is a real ephemeral loopback TCP server, never an eNSP device.
 // Scripts specify exactly which lines may be sent, including interactive input.
 async function fixture(t, script, options = {}) {

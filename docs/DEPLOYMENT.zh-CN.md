@@ -38,7 +38,7 @@ npm ci --ignore-scripts
 node bin/ensp-fusion.mjs tools
 ```
 
-tools应输出16个工具。即使只用MCP/CLI，也要安装本包的Node依赖，包括@deepseek-ai/dsh-tools与@deepseek-ai/schemastery；不要求启动DSH应用，但不能只复制入口JS。
+tools应输出19个工具。即使只用MCP/CLI，也要安装本包的Node依赖，包括@deepseek-ai/dsh-tools与@deepseek-ai/schemastery；不要求启动DSH应用，但不能只复制入口JS。连续 Zstandard 日志导出需要 Node 22.15+；其他工具最低 Node 20。
 
 npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整源码或本地打包安装。不要把 npm publish 当部署流程。分发包的files清单不包含完整开发脚本、测试和锁文件；npm test、check:plugin等维护命令应在完整源码工程运行。
 
@@ -79,11 +79,11 @@ npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整�
 
 MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作为命令行选项。GUI批次可使用工具timeout_ms；配置API另有timeoutMs。
 
-1.1.1 初始化后应列出16工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的快照，拓扑变更后需重新list。新增服务验收与兼容性说明见 REMAINING-MODULES.zh-CN.md。
+1.1.3 初始化后应列出19工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的磁盘快照，不是当前 GUI 工程身份，拓扑变更后需重新list。新工具与凭据引用见 [1.1.2 说明](releases/1.1.2.zh-CN.md)，当前兼容性见 [1.1.3 说明](releases/1.1.3.zh-CN.md)。
 
 ## 4. DSH接入
 
-1.1.1的目标宿主为**DSH 0.2.2-rc.1**，peer依赖为`@deepseek-ai/dsh-tools@0.2.2-rc.1`和`@deepseek-ai/schemastery@3.19.0`。1.1.0的旧SDK声明会被该宿主拦截，升级到本次源码或修复包；不要通过编辑宿主或授予版本豁免掩盖不匹配。其他DSH版本须另行核验，具体安装及隔离宿主检查见[1.1.1修复说明](releases/1.1.1.zh-CN.md)。
+1.1.3 支持 **DSH 0.2.2-rc.1、0.2.2-rc.3**，peer 依赖为 `@deepseek-ai/dsh-tools: 0.2.2-rc.1 || 0.2.2-rc.3` 和 `@deepseek-ai/schemastery@3.19.0`，锁文件使用 rc.3。1.1.2 仅声明 rc.1，会被 rc.3 宿主拦截；升级到本次源码或修复包，不要编辑宿主或授予版本豁免。其他 DSH 版本须另行核验，安装及隔离宿主检查见 [1.1.3 修复说明](releases/1.1.3.zh-CN.md)。
 
 在现有profile合并下列片段，保留其他依赖和bundle：
 
@@ -147,7 +147,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 | 现象 | 检查与处理 |
 | --- | --- |
 | ERR_MODULE_NOT_FOUND | 源码根目录按锁文件npm ci，检查peer依赖，不只复制入口 |
-| 1.1.0与DSH 0.2.2-rc.1不兼容 | 更新到1.1.1源码/修复包并解析依赖，确认加载的是新版后重新加载插件；见1.1.1发布说明 |
+| 旧插件与 DSH rc.1/rc.3 不兼容 | 更新到 1.1.3 源码/修复包并解析依赖，重新加载插件后核对版本与构建指纹；见 1.1.3 发布说明 |
 | node找不到/版本不符 | 检查客户端PATH，必要时用node.exe绝对路径 |
 | Python导入失败 | 用实际配置解释器执行-m pip和import测试 |
 | 桥失败/1223 | 检查解释器、权限和是否拒绝UAC |
@@ -166,7 +166,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 
 ## 8. 验收和交付
 
-1. 源码：tools列出16项，npm test通过。
+1. 源码：tools列出19项，npm test通过。
 2. 分发：test:package验证临时打包、离线安装和CLI/MCP；不能证明设备启动。
 3. 客户端：MCP初始化/工具列表或DSH实际调用成功。
 4. 实机：专用实验验证就绪、配置、保存、协议与业务正反向断言。

@@ -15,8 +15,8 @@ async function fixture(t) {
     const results = []
     for (const s of steps) {
       calls.push(s)
-      results.push({ ...s, ok: s.op !== 'bad', ...(s.op === 'windows' ? { windows: [] } : {}) })
-      if (s.op === 'bad' && opts.stopOnError) break
+      results.push({ ...s, ok: s.op !== 'cursor', ...(s.op === 'windows' ? { windows: [] } : {}) })
+      if (s.op === 'cursor' && opts.stopOnError) break
     }
     return { steps: results }
   })
@@ -35,7 +35,7 @@ test('GUI validates every topology before earlier GUI mutations', async t => {
 test('stop_all uses atomic canvas selection and validates port closure before next step', async t => {
   const f = await fixture(t)
   await writeFile(join(f.workspace, 'lab.topo'), '<topo><dev id="1" name="R1" com_port="9998"/></topo>')
-  const out = await f.run({ topology_path: 'lab.topo', steps: [{ op: 'stop_all' }, { op: 'bad' }] })
+  const out = await f.run({ topology_path: 'lab.topo', steps: [{ op: 'stop_all' }, { op: 'cursor' }] })
   assert.equal(out.ok, false)
   assert.equal(out.requiresCursorTakeover, true)
   assert.deepEqual(f.calls[0], { op: 'device_control', ensp: true, toolbar: [698, 56] })
@@ -105,9 +105,9 @@ test('closing an already closed console is idempotent', async t => {
 
 test('failed raw input skips later keystrokes and convenience operations', async t => {
   const f = await fixture(t)
-  const out = await f.run({ steps: [{ op: 'bad' }, { op: 'type', text: 'danger' }, { op: 'close_console', device: 'R1' }] })
+  const out = await f.run({ steps: [{ op: 'cursor' }, { op: 'type', text: 'danger' }, { op: 'close_console', device: 'R1' }] })
   assert.equal(out.ok, false)
-  assert.deepEqual(f.calls.map(s => s.op), ['bad'])
+  assert.deepEqual(f.calls.map(s => s.op), ['cursor'])
   assert(out.steps.some(s => s.op === 'skipped' && s.skipped.includes('type')))
 })
 

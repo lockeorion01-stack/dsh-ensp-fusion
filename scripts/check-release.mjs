@@ -23,6 +23,7 @@ async function main(){
  const pkg=JSON.parse(await readFile(resolve(root,'package.json'),'utf8')),lock=JSON.parse(await readFile(resolve(root,'package-lock.json'),'utf8'))
  if(pkg.version!==lock.version||pkg.version!==lock.packages?.['']?.version)issue('package-lock.json','package versions differ')
  if(JSON.stringify(pkg.peerDependencies)!==JSON.stringify(lock.packages?.['']?.peerDependencies))issue('package-lock.json','peer dependency versions differ')
+ for(const field of ['dependencies','devDependencies'])if(JSON.stringify(pkg[field])!==JSON.stringify(lock.packages?.['']?.[field]))issue('package-lock.json',field+' differ from manifest')
  if(pkg.private===true)issue('package.json','public npm package requested but package.json still marks private:true')
  const required=['README.md','CHANGELOG.md','CONTRIBUTING.md','NOTICE.md','LICENSE','LICENSE-MIT','docs/GITHUB-RELEASE.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','docs/TOTAL-ACCEPTANCE.zh-CN.md','docs/releases/'+pkg.version+'.zh-CN.md']
  for(const file of required){try{if(!(await stat(resolve(root,file))).isFile())issue(file,'required release file is not a file')}catch{issue(file,'required release file missing')}}

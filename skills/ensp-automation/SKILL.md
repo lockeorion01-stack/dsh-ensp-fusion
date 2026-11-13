@@ -263,26 +263,19 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
 - 返回值里的 `saved` 字段告诉你结果：`{performed:true, ok:true, output:"Save the configuration successfully."}`。`ok:false` 要人工再查一次。
 - 用户明确说"不用保存/临时实验"才传 `save:false`；单条读取想省时间也可以传 `save:false`。
 - `stop_all` / 重启设备会让**没 save 的配置全部丢失**（设备从 `vrpcfg.cfg` 重新加载），所以保存必须发生在停设备之前。
-- 校验落盘：`display saved-configuration` 能看到刚下发的条目，或 `dir` 里 `vrpcfg.cfg` 时间戳是刚才。
+- 核对 `display saved-configuration` 的预期条目；文件时间戳或大小只能作为线索，不能证明当前基线已保存。
 
 ### 3.5.1 保存拓扑（比 save 更容易漏）
 
-**设备 `save` 只写进设备自己的 flash，关掉 eNSP 后并不保证还在。** 实测：只做设备 `save`、然后结束 `eNSP_Client.exe` 进程，重开同一个 `.topo` 时配置全部回到初始状态（拓扑目录里的 `vrpcfg.cfg` 还是 0 字节、`flash.efz`/`vrpcfg.zip` 还是几个月前的时间戳）。
+设备保存、工程回写和重开恢复是三层证据，分别记录。Ctrl+S 只是请求保存；同步日志报错、文件为空或旧配置都必须报告失败或未完成。
 
-要把配置真正留在拓扑里，收尾必须再按一次 **主窗口 Ctrl+S（保存拓扑）**：
+1. 用设备回显确认 `save`，检查 `display saved-configuration` 中预期基线。
+2. 刷新 `ensp_status`，确认主窗口和保存对话框；向已核对的句柄发送 Ctrl+S，再检查对话框和原生同步日志。`key` 的成功仅代表投递。
+3. 用 `ensp_project action:inspect` 和 `expected_file` 核对真实配置内容；USG 读 `vrpcfg.cfg`，其他 CLI 设备解析 `flash.efz` 的配置归档。缺失、空文件、损坏或缺预期条目均不通过。内嵌归档不证明挂载文件系统指针或冷启动。
+4. `ensp_project action:checkpoint` 新建配置资产检查点，备份目录必须位于项目外。它不复制 VM 磁盘，不等同完整工程备份。切换或关闭现场前另行备份完整工程及非空历史配置。
+5. 在用户授权的维护范围内关闭、重开同一工程，重新读取版本、当前配置并执行业务断言；`action:compare` 只能比较磁盘哈希，`reloadVerified:false` 不可改称重开通过。不能为做验收丢弃未保存现场。
 
-```
-ensp_gui steps=[{"op":"activate","title":"eNSP"},{"op":"key","mods":["ctrl"],"key":"s"},{"op":"sleep","t":5}]
-```
-
-按下后拓扑目录里的设备文件会立刻被回写，用文件大小/时间戳就能验证：
-
-```powershell
-$dir = Get-ChildItem "E:\...\lab\3-1" -Directory | Select-Object -First 1
-Get-ChildItem $dir.FullName -Recurse -File | ForEach-Object { "{0:yyyy-MM-dd HH:mm:ss} {1,8:N0} {2}" -f $_.LastWriteTime, $_.Length, $_.Name }
-```
-
-实测 USG6000V 拓扑按 Ctrl+S 后：`vrpcfg.cfg` 0 → 4,913 B、`vrpcfg.zip` 619 → 618 B、`flash.efz` 9,348 → 11,188 B，全部变成当时时间；随后关掉 eNSP 重开，主机名、接口地址、NAT 策略、改过的口令都还在，ping 8.8.8.8 仍然 5/5。
+已检查的 eNSP 保存框可使用 `dialog_decision`，必须提供当前 `hwnd`、`dialog_hwnd` 和 `decision:save/discard/cancel`；未知框不发送决定。对话框消失也不证明保存或加载完成。
 
 ## 4. .topo 文件通道
 
@@ -307,7 +300,7 @@ Get-ChildItem $dir.FullName -Recurse -File | ForEach-Object { "{0:yyyy-MM-dd HH:
 6. 配置依次下发（`ensp_cli` + `system_view`），每台设备配完立刻复制回显留档；**配完就 `save`**（`ensp_cli` 会自动做，检查 `saved.ok`）。
 6. **验证**（见下），不通过就查错误目录，不要急着截图。
 7. 截图：需要"像学生手动做"的界面时，用 `ensp_cli echo_to_window:true` 把同样命令用**真实键盘**打进设备窗口再截（命令会真的再执行一次，`display` 类命令无所谓，配置类命令要挑不会报错的写法）。回显前工具会先确认窗口可见并抢到前台，抢不到就拒绝打字而不是乱打。截完用 `close_console` 收掉窗口。
-8. `ensp_doc` 出两份文档；回复里列改动过的密码和账号表。
+8. `ensp_doc` 出两份文档；普通报告和回复只说明凭据引用，不列明文口令。敏感凭据仅在用户明确要求时单独交付。
 
 ## 6. 四层验证（缺一层就不算通过）
 
@@ -338,11 +331,11 @@ Get-ChildItem $dir.FullName -Recurse -File | ForEach-Object { "{0:yyyy-MM-dd HH:
 | 换机器后第一次 GUI 动作卡住十几秒 | 该机 UAC 是默认级别，`runas` 会给**每个 job** 弹授权框（实测一次冷启动开设备窗口 ≈ 7 个 job，一场实验 20–60 次） | 让用户点一次，或把 `mode` 设成 `"serve"`（提权侧车只启动一次），最省事是让用户以管理员身份运行 DSH（`runas` 变成继承，0 次弹框） |
 | `面板可能不在可见画布内（试过 7 个图标位置）` | eNSP 主窗口被**最小化**了，`rect` 是 `-32000` 废值 | 已自动 `SW_RESTORE` 后重算；若仍失败让用户先还原 eNSP 窗口 |
 | `bridge.elevated:false` 但 eNSP 在跑 | 桥没提权，对提权窗口的消息会被 UIPI 拒绝 | 以管理员身份运行 DSH；telnet/.topo 通道仍然可用 |
-| `saved.ok:false` | `save` 回显里没有成功字样 | 补 `display saved-configuration` 核对，或 `dir` 看 `vrpcfg.cfg` 时间戳 |
+| `saved.ok:false` | 未确认设备保存 | 核对 `display saved-configuration` 的具体基线及工程配置内容，不能仅检查时间戳 |
 | AR2220 保存交互 | 按设备实际提示确认并核对成功回显 | 使用 save:true，不拼接多行命令；两台 AR2220 实测通过。 |
 | `console authentication failed for user "admin"` | 口令不对，或改密流程没走完（答 `N` 会被踢回 `Login authentication`） | 先试出厂 `Admin@123`；设备要求改密时传 `new_password`（工具会走 Y→旧→新→确认） |
 | USG6000V 登录卡在 `The password needs to be changed. Change now? [Y/N]:` | 出厂口令首次登录强制改密 | `ensp_cli` 传 `username`/`password`/`new_password`，例如 `admin` + `Admin@123` → `Huawei@123` |
-| 重开 `.topo` 后配置全没了 | 只做了设备 `save`，**没保存拓扑**；eNSP 只在 Ctrl+S 时把设备 flash 写回拓扑目录 | 收尾按主窗口 **Ctrl+S**，再用 `vrpcfg.cfg`/`flash.efz` 的大小和时间戳确认 |
+| 重开 `.topo` 后配置缺失 | 保存、工程同步或启动加载任一层可能失败，根因需取证 | 保护历史非空备份，关联同步日志，核对配置内容及重开后的当前配置；不能直接归因于漏 Ctrl+S |
 | 设备窗口截图是旧画面（不刷新） | 窗口被遮挡/不在前台时，窗口 DC 不重绘，BitBlt 拿到上一屏 | 工具已在截图前 `RedrawWindow`+`UpdateWindow`；仍不行就先 `activate` 该窗口再截 |
 | telnet 能用但窗口打字乱码/丢字符 | 控制台空闲超时（`Configuration console time out, please press any key to log on`），第一个按键被吃掉；或打字太快 | 工具已自动先发一个回车唤醒；`echo_to_window` 的 `per_char` 已提到 0.05 |
 | 重置拓扑文件夹后设备配置还在 | eNSP 的设备状态保存在设备镜像里，重新解压 .zip 不等于复位 | 真复位要在设备上 `reset saved-configuration` 再 `reboot`；否则先 `display current-configuration` 核对残留 |

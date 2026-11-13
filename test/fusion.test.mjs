@@ -1,4 +1,4 @@
-﻿import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, symlink, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -12,17 +12,17 @@ import { parseTopo } from '../lib/topo.js'
 
 const args = () => ({ devices: [{ name: 'R1', model: 'AR2220' }, { name: 'R2', model: 'AR2220' }], links: [{ a: 'R1', a_port: 'GigabitEthernet0/0/0', b: 'R2', b_port: 'GigabitEthernet0/0/0' }] })
 async function workspace(t) { const p = await mkdtemp(join(tmpdir(), 'ensp-fusion-')); t.after(() => rm(p, { recursive: true, force: true })); return p }
-test('unified registry has sixteen unique tools and closed schemas', () => {
+test('unified registry has nineteen unique tools and closed schemas', () => {
   const r = createRegistry({ quiet: true })
-  assert.equal(r.tools.length,16); assert.equal(new Set(r.tools.map(t => t.name)).size,16)
+  assert.equal(r.tools.length,19); assert.equal(new Set(r.tools.map(t => t.name)).size,19)
   const build = r.tools.find(t => t.name === 'ensp_build')
   assert.deepEqual(build.inputSchema.required, ['output_path','devices'])
   assert.deepEqual(build.inputSchema.properties.devices.items.required, ['name','model'])
 })
-test('DSH registers both workflow skills and the same sixteen tools', () => {
+test('DSH registers both workflow skills and the same nineteen tools', () => {
   const skills=[],tools=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:()=>{}}},Config({}))
-  assert.equal(tools.length,16)
+  assert.equal(tools.length,19)
   assert.deepEqual(skills.map(s=>s.name),['ensp-automation','ensp-fusion'])
   assert.ok(skills[1].content.includes('ensp_wait'))
 })

@@ -11,6 +11,9 @@ description: Fusion-specific topology construction, scenarios and convergence wo
 原有截图与 Word 报告使用 `ensp_capture`、`ensp_doc`。
 新工具返回 `{ok,data,error}`，data 是 JSON 字符串；失败时不要假定配置回滚。
 
+1.1.2 增加 `ensp_project`（配置内容检查/新建检查点/磁盘对比）、`ensp_console_diagnose`（单次探测及串口/同步日志关联）和 `ensp_logexport`（新建脱敏日志副本）。这些工具直接返回结构化对象。DSH 对插件正文 `ok:false` 返回 `isError:true`，证据保留在 content；原始 GUI open/spawn/key/bmclick 成功只表示投递，不能证明工程加载。
+`ensp_status` 分开报告隐藏窗口、进程、模态框、构建指纹与磁盘拓扑；当前工程身份未验证时保持 unknown。仅收到 `#` 是 non_vrp_console，不延长等待冒充就绪。CLI 支持命令对象 `expected_view` 与逐条匹配的 `replies:[{expect,reply}]`；未知问答停止，return 后配置模式会重新进入 system-view。凭据优先用本地 credential_file/credential_ref，命令可用 commands_file；不要把凭据文件提交或把原始宿主日志公开。
+
 `ensp_inspect` 采集失败时外层 `ok:false`，`data` 仍保留部分证据；`ensp_wait` 失败也保留结构化数据。离线分析的 DIFFERENT、INCONCLUSIVE、UNKNOWN 不等于调用错误或网络健康。
 
 正式配置用 `ensp_cli dry_run:true` 先预览，再提供 `change_dir` 启用前后快照和逐命令持久化记录；`recovery_commands` 必须根据原有配置编写。`list_changes` 检索历史及中断记录，`recover_from` 执行记录内显式恢复计划，默认不保存。恢复前核对设备和命令，不猜测反向命令、不自动回滚。控制台同端口有跨进程锁，`device_busy` 时先检查持有会话。详情见 docs/CHANGE-MANAGEMENT.zh-CN.md。

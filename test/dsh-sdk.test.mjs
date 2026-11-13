@@ -7,13 +7,14 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolsService } from '@deepseek-ai/dsh-tools'
 import { ToolExecutionPipeline, executeToolBatch } from '@deepseek-ai/dsh-tools/pipeline'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import { Bridge } from '../lib/bridge-client.js'
 import * as plugin from '../index.js'
 
 test('target DSH SDK registers, dispatches, validates and unloads the plugin', async t => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   const sdk = JSON.parse(await readFile(new URL('../node_modules/@deepseek-ai/dsh-tools/package.json', import.meta.url), 'utf8'))
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-tools'], '0.2.2-rc.1')
-  assert.equal(sdk.version, manifest.peerDependencies['@deepseek-ai/dsh-tools'])
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-tools'], '0.2.2-rc.1 || 0.2.2-rc.3')
+  assert.ok(['0.2.2-rc.1', '0.2.2-rc.3'].includes(sdk.version), `unverified SDK: ${sdk.version}`)
   const cwd = await mkdtemp(join(tmpdir(), 'ensp-dsh-sdk-'))
   t.after(() => rm(cwd, { recursive: true, force: true }))
   const ctx = new Context()
@@ -24,17 +25,22 @@ test('target DSH SDK registers, dispatches, validates and unloads the plugin', a
   ctx.provide('skills', { register() {} })
   const mounted = await ctx.plugin(plugin, plugin.Config({}))
   t.after(() => mounted.dispose())
-  assert.equal(ctx.tools.definitions().length, 16)
+  assert.equal(ctx.tools.definitions().length, 19)
   const pipeline = new ToolExecutionPipeline(ctx)
   ctx.tools.setExecutor({
     describe: tools => ({ schemas: tools.map(({ name, description, parameters }) => ({ name, description, parameters })) }),
     execute: input => executeToolBatch(input, pipeline, () => 1),
   })
   const assembly = await ctx.systemPrompt.assemble()
-  assert.equal(assembly.tools.length, 16)
+  assert.equal(assembly.tools.length, 19)
   assert.ok(assembly.sections.some(s => s.name === 'ensp:automation'))
   const call = async (name, args) => (await ctx.tools.execute({
     calls: [{ type: 'tool_call', id: 'sdk-check', name, arguments: JSON.stringify(args) }],
+    signal: new AbortController().signal,
+    agent: { session: { header: { cwd } } },
+  })).results[0].result
+  const callRaw = async (name, args) => (await ctx.tools.execute({
+    calls: [{ type: 'tool_call', id: 'sdk-check-raw', name, arguments: args }],
     signal: new AbortController().signal,
     agent: { session: { header: { cwd } } },
   })).results[0].result
@@ -49,6 +55,29 @@ test('target DSH SDK registers, dispatches, validates and unloads the plugin', a
   const topo = await call('ensp_topo', { action: 'list', topology_path: 'sdk.topo' })
   assert.equal(topo.isError, false)
   assert.ok(topo.content[0].text.includes('R1'))
+
+  const guiCalls = []
+  t.mock.method(Bridge.prototype, 'steps', async steps => {
+    guiCalls.push(...steps)
+    return { steps: steps.map(step => ({ ...step, ok: true })) }
+  })
+  const opened = await call('ensp_gui', { steps: [{ op: 'open', path: 'sdk.topo' }] })
+  assert.equal(opened.isError, false)
+  assert.equal(opened.value.ok, true)
+  assert.deepEqual(guiCalls, [{ op: 'open', path: join(cwd, 'sdk.topo') }])
+  assert.equal(opened.value.outcome.taskVerified, false)
+  assert.equal(opened.value.steps[0].completion, 'dispatched')
+
+  const failed = await call('ensp_project', { action: 'inspect', topology_path: 'sdk.topo' })
+  assert.equal(failed.isError, true, 'ok:false must propagate to the host error envelope')
+  assert.equal(failed.value, undefined, 'failure must follow SDK contract without success value')
+  assert.equal(JSON.parse(failed.content[0].text).devices[0].state, 'missing')
+  assert.equal(failed.error.info.code, 'ENSP_OPERATION_FAILED')
+
+  const malformed = await callRaw('ensp_status', '{"z_end_turn_review":"')
+  assert.equal(malformed.isError, true)
+  assert.equal(guiCalls.length, 1, 'invalid JSON must be rejected before any bridge/device operation')
+
   const invalid = await call('ensp_build', { output_path: 'invalid.topo' })
   assert.equal(invalid.isError, true)
   await assert.rejects(readFile(join(cwd, 'invalid.topo')), { code: 'ENOENT' })
