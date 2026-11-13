@@ -2,7 +2,7 @@
   "name": "dsh-ensp-fusion",
   "version": "1.1.3",
   "type": "module",
-  "description": "Huawei eNSP unified DSH/MCP/CLI plugin: topology construction, scenarios, hardened automation, convergence and evidence reports",
+  "description": "Huawei eNSP automation for DSH, MCP and CLI: topology, device configuration, convergence checks, project checkpoints and redacted evidence reports",
   "license": "GPL-3.0-or-later",
   "exports": {
     ".": "./index.js",
