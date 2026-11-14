@@ -22,4 +22,6 @@
 
 ## 场景能力同步与适配
 
+2026-11-14 检修：融合适配层修正 campus-network 蓝图中 EDGE1 到 FW1 trust 接口的直连地址冲突（10.1.250.1/24 → 10.1.249.2/24），在生成输出 notes 中标注原值和原因；原样同步的 labs.mjs、presets.mjs 及版权/许可证保持不变。
+
 2026-11-14：从 lizi600jin/dsh-ensp 提交 `9f1452bb8a5448f1f26283159fb02752f21ac0b2`（package.json 版本 0.8.0）原样同步 `src/core/presets.mjs` 和 `src/core/labs.mjs` 到本项目 `upstream/lizi600jin/src/core/`。新增融合层 `lib/scenario-lab.js` 接入蓝图与地址配置准备，`lib/topology-builder.js` 复用原融合版校验。上游 `build.mjs` 的本地修改增加 DHCP PC 启动参数，并在文件内注明修改日期；保留已有 USG/Client/Server 适配。完整范围及暂未接入能力见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。原作者、GPL 许可与 MIT 来源声明继续随分发保留。

@@ -45,6 +45,33 @@ test('legacy model metadata and mixed Ethernet/GE declarations resolve declared 
   assert.deepEqual(topologyLldpLinks(xml).links, [{ a: 'FW', a_port: 'GigabitEthernet0/0/0', b: 'SW', b_port: 'GigabitEthernet0/0/1' }])
 })
 
+test('grouped native parallel links all require LLDP evidence and support destIndex', () => {
+  const xml = serialiseTopology(generateTopology({ devices: [{ name: 'R1', model: 'AR2220' }, { name: 'R2', model: 'AR2220' }],
+    links: [0, 1].map(index => ({ a: 'R1', a_port: 'GigabitEthernet0/0/' + index, b: 'R2', b_port: 'GigabitEthernet0/0/' + index })) }))
+  const lines = [...xml.matchAll(/<line\b([^>]*)>([\s\S]*?)<\/line>/gu)]
+  assert.equal(lines.length, 2)
+  const combined = '<line' + lines[0][1] + '>' + lines.map(line => line[2]).join('') + '</line>'
+  const grouped = xml.replace(lines[0][0], combined).replace(lines[1][0], '')
+  for (const source of [grouped, grouped.replaceAll('tarIndex=', 'destIndex=')]) {
+    const expected = topologyLldpLinks(source)
+    assert.equal(expected.links.length, 2)
+    assert.equal(expected.unresolved.length, 0)
+    const observations = [
+      { device: 'R1', output: 'GE0/0/0  R2  GE0/0/0  120' },
+      { device: 'R2', output: 'GE0/0/0  R1  GE0/0/0  120' },
+    ]
+    assert.notEqual(compareLldp(expected.links, observations).status, 'MATCH')
+    observations[0].output += '\nGE0/0/1  R2  GE0/0/1  120'
+    observations[1].output += '\nGE0/0/1  R1  GE0/0/1  120'
+    assert.equal(compareLldp(expected.links, observations).status, 'MATCH')
+  }
+  const broken = grouped.replace('tarIndex="1"', 'tarIndex="999"')
+  assert.equal(topologyLldpLinks(broken).links.length, 1)
+  assert.equal(topologyLldpLinks(broken).unresolved.length, 1)
+  const empty = '<line' + lines[0][1] + '/>'
+  assert.equal(topologyLldpLinks(xml.replace(lines[1][0], empty)).unresolved.length, 1)
+})
+
 test('LLDP topo_path, name mapping, timestamps and workspace junction boundaries integrate', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ensp-lldp-')), outside = await mkdtemp(join(tmpdir(), 'ensp-lldp-out-'))
   t.after(() => rm(root, { recursive: true, force: true })); t.after(() => rm(outside, { recursive: true, force: true }))

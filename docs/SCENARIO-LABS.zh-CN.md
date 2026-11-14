@@ -34,7 +34,7 @@ node bin/ensp-fusion.mjs call ensp_cli (Join-Path $Lab 'cli-plan.json') $Lab
 | 文件 | 内容 |
 | --- | --- |
 | topology.topo | 由蓝图生成的新拓扑，保留专门布局 |
-| addressing.json | 原始地址规划表，包括地址说明 |
+| addressing.json | 融合适配后的地址规划表，包括地址说明；上游修正记录见 notes |
 | scenario.md | 实验步骤、检查命令、易错点与生成边界 |
 | cli-plan.json | 有 VRP 地址配置时才生成，可供 ensp_cli 直接预览 |
 | 001-device.cfg 等 | 对应设备的独立配置骨架，包含 system-view/return |
@@ -63,6 +63,8 @@ node bin/ensp-fusion.mjs call ensp_build examples/build-scenario.json $Lab
 
 - cli_plan 默认 dry_run:true，每台设备 save:false、system_view:true；生成不代表执行、保存或业务通过。
 - IPv4 前缀仅接受 0..32，IPv6 仅接受 0..128，拒绝非法地址和多行注入。
+- 自定义终端 IPv4 掩码要求连续的高位 1 和低位 0；pc 参数仅用于 PC/Client/Server，auto_layout 必须为布尔值。
+- campus-network 的 EDGE1 GE0/0/1 原值 10.1.250.1/24 与直连 FW1 GE1/0/0 的 10.1.249.1/24 不同网段；融合层改为该骨架中未占用的 10.1.249.2/24。查询、地址表、配置计划和说明同步，notes 保留原值及修正原因，固定上游 labs.mjs 不变。这是蓝图修正，现场已有工程须另行核对。
 - IPv6 骨架包含全局 ipv6 和接口 ipv6 enable；Vlanif 骨架先创建对应 VLAN。仍需核对具体固件语法。
 - 不自动生成 OSPF/BGP/VRRP、路由策略、VLAN 端口成员、Trunk、隧道参数、安全策略或接口二三层切换。使用场景指导补全。
 - DHCP 模拟 PC 通过原生 -simpc_dhcp_state 1 启用动态地址，静态 IPv4 字段归零并启用自动 DNS，不能与静态地址选项混用。
@@ -82,4 +84,4 @@ npm run check:release
 
 新增回归逐一生成全部支持蓝图并检查拓扑回读、端口唯一性和 CLI 计划；覆盖 CIDR 边界、IPv6/Vlanif 前置命令、DHCP、Server 参数、防覆盖、路径边界、外部工作目录 CLI 及共享工具处理器。现场设备测试另行记录。
 
-本轮源码验证：317 项 Node 测试及 24 项 MCP 冒烟通过；插件注册、安装包离线干净安装、发布前检查通过。DSH 0.2.2-rc.3 隔离宿主原生执行器另行验证场景搜索、蓝图生成与地址配置预览。上述检查不修改用户 profile，不启动 eNSP，不构成现场网络验收。
+本轮检修后源码验证：323 项 Node 测试及 24 项 MCP 冒烟通过；插件注册、安装包离线干净安装、发布前检查通过。新增回归覆盖显式设备/端口一致性、整批连接前拒绝、并行链路完整性、非法掩码与选项、园区地址修正及全部场景直连 IPv4 网段一致性。DSH 0.2.2-rc.3 隔离宿主原生执行器另行验证场景搜索、蓝图生成与地址配置预览。上述检查不修改用户 profile，不启动 eNSP，不构成现场网络验收。

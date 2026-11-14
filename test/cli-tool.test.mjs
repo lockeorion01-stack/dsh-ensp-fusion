@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createMcpServer } from '../mcp/server.js'
 import { prepareCliEntries } from '../lib/cli-plan.js'
+import { generateTopology } from '../lib/topology-builder.js'
+import { serialiseTopology } from '../upstream/lizi600jin/src/core/topology.mjs'
 
 async function fixture(t, respond = () => 'done') {
   const commands = [], sockets = new Set()
@@ -77,6 +79,35 @@ test('reject invalid batch before connecting any device', async (t) => {
   ] })
   assert.equal(response.result.isError, true)
   assert.equal(device.connections, 0)
+})
+
+test('topology device identity is checked even with an explicit port', () => {
+  const topology = [{ name: 'R1', comPort: 2000 }, { name: 'R2', comPort: 2001 }]
+  const args = { device: 'r1', port: 2000, commands: ['display version'] }
+  assert.equal(prepareCliEntries(args, topology)[0].port, 2000)
+  assert.equal(prepareCliEntries({ ...args, port: undefined }, topology)[0].port, 2000)
+  assert.throws(() => prepareCliEntries({ ...args, port: 2001 }, topology), /port.*match|port.*mismatch/i)
+  assert.throws(() => prepareCliEntries({ ...args, device: 'UNKNOWN' }, topology), /exactly one topology device/)
+  assert.throws(() => prepareCliEntries(args, [...topology, { name: 'R1', comPort: 2002 }]), /exactly one topology device/)
+  assert.throws(() => prepareCliEntries(args, [topology[0], { name: 'R2', comPort: 2000 }]), /shared/)
+  assert.equal(prepareCliEntries({ ...args, device: 'reporting-label' })[0].port, 2000)
+  assert.equal(prepareCliEntries({ port: 2001, commands: args.commands }, topology)[0].port, 2001)
+})
+
+test('explicit target mismatch rejects the entire batch before opening a connection', async t => {
+  const device = await fixture(t), wrong = await fixture(t), root = await workspace(t)
+  const topology = generateTopology({ devices: [{ name: 'R1', model: 'AR2220', options: { comPort: wrong.port === 2000 ? 2001 : 2000 } }] })
+  await writeFile(join(root, 'target.topo'), serialiseTopology(topology))
+  const server = createMcpServer({ workspace: root, quiet: true })
+  for (const dry_run of [true, false]) {
+    const { response } = await invoke(server, 'ensp_cli', { topology_path: 'target.topo', dry_run, save: false, devices: [
+      { port: device.port, commands: ['display version'] },
+      { device: 'R1', port: wrong.port, commands: ['sysname WRONG_TARGET'] },
+    ] })
+    assert.equal(response.result.isError, true)
+  }
+  assert.equal(device.connections, 0)
+  assert.equal(wrong.connections, 0)
 })
 test('LLDP confirmation option is validated for every device before connecting', async t => {
   const device=await fixture(t)

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { SCENARIO_IDS } from '../upstream/lizi600jin/src/core/presets.mjs'
+import { LABS } from '../upstream/lizi600jin/src/core/labs.mjs'
 import { parseTopology, serialiseTopology } from '../upstream/lizi600jin/src/core/topology.mjs'
 import { addressCommand, describeScenario, prepareScenario, scenarioSupport, generateScenarioLab } from '../lib/scenario-lab.js'
 import { generateTopology } from '../lib/topology-builder.js'
@@ -49,6 +50,42 @@ test('CIDR conversion enforces family limits and does not wrap IPv4 prefix shift
   for (const invalid of ['192.0.2.1/33', '192.0.2.1/', '999.1.1.1/24', '2001:db8::1/129',
     '2001:db8::1/-1', '192.0.2.1/2e1', '192.0.2.1/24/reboot', '192.0.2.1\nreboot/24']) {
     assert.throws(() => addressCommand(invalid), /CIDR/)
+  }
+})
+
+test('campus direct link uses consistent addresses without modifying the upstream blueprint', async t => {
+  const upstream = LABS['campus-network'].addressing.find(row => row.device === 'EDGE1' && row.port === 'GigabitEthernet0/0/1')
+  assert.equal(upstream.ip, '10.1.250.1/24')
+  const details = describeScenario('campus-network')
+  const edge = details.addressing.find(row => row.device === 'EDGE1' && row.port === 'GigabitEthernet0/0/1')
+  assert.equal(edge.ip, '10.1.249.2/24')
+  assert.equal(upstream.ip, '10.1.250.1/24')
+  assert.ok(details.notes.some(note => note.includes('10.1.250.1/24') && note.includes('10.1.249.2/24')))
+  const prepared = prepareScenario('campus-network')
+  assert.ok(prepared.configuration.devices.find(device => device.device === 'EDGE1').commands.includes('ip address 10.1.249.2 255.255.255.0'))
+  const out = join(await workspace(t), 'campus')
+  await generateScenarioLab({ id: 'campus-network', out })
+  const addresses = JSON.parse(await readFile(join(out, 'addressing.json'), 'utf8'))
+  assert.equal(addresses.find(row => row.device === 'EDGE1' && row.port === edge.port).ip, edge.ip)
+  assert.match(await readFile(join(out, 'scenario.md'), 'utf8'), /10\.1\.249\.2\/24/u)
+})
+
+test('all directly addressed IPv4 peers share a subnet in both directions', () => {
+  const number = ip => ip.split('.').reduce((value, octet) => value * 256 + Number(octet), 0)
+  for (const id of SCENARIO_IDS) {
+    const details = describeScenario(id)
+    for (const link of details.links) {
+      const left = details.addressing.filter(row => row.device === link.a && row.port === link.a_port)
+      const right = details.addressing.filter(row => row.device === link.b && row.port === link.b_port)
+      for (const a of left) for (const b of right) {
+        if (a.ip.includes(':') || b.ip.includes(':')) continue
+        for (const bits of [a.ip, b.ip].map(ip => Number(ip.split('/')[1]))) {
+          const subnetSize = 2 ** (32 - bits)
+          assert.equal(Math.floor(number(a.ip.split('/')[0]) / subnetSize), Math.floor(number(b.ip.split('/')[0]) / subnetSize),
+            id + ': ' + link.a + ' ' + a.ip + ' <-> ' + link.b + ' ' + b.ip)
+        }
+      }
+    }
   }
 })
 

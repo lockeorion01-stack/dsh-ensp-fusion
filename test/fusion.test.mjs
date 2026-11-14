@@ -11,6 +11,20 @@ import { parseTopology, serialiseTopology } from '../upstream/lizi600jin/src/cor
 import { parseTopo } from '../lib/topo.js'
 
 const args = () => ({ devices: [{ name: 'R1', model: 'AR2220' }, { name: 'R2', model: 'AR2220' }], links: [{ a: 'R1', a_port: 'GigabitEthernet0/0/0', b: 'R2', b_port: 'GigabitEthernet0/0/0' }] })
+
+test('native endpoint settings reject noncontiguous masks and unsupported device options', () => {
+  for (const model of ['PC', 'Client', 'Server']) {
+    const devices = [{ name: 'Host1', model, options: { pc: { mask: '255.0.255.0' } } }]
+    assert.throws(() => generateTopology({ devices }), /mask/)
+    for (const bits of [0, 1, 8, 24, 31, 32]) {
+      const binary = '1'.repeat(bits).padEnd(32, '0')
+      devices[0].options.pc.mask = binary.match(/.{8}/gu).map(octet => parseInt(octet, 2)).join('.')
+      assert.equal(generateTopology({ devices }).devices.length, 1)
+    }
+  }
+  assert.throws(() => generateTopology({ devices: [{ name: 'R1', model: 'AR2220', options: { pc: { ip: '10.0.0.1' } } }] }), /PC.*Client.*Server/)
+  assert.throws(() => generateTopology({ ...args(), auto_layout: 'false' }), /auto_layout.*boolean/)
+})
 async function workspace(t) { const p = await mkdtemp(join(tmpdir(), 'ensp-fusion-')); t.after(() => rm(p, { recursive: true, force: true })); return p }
 test('unified registry has nineteen unique tools and closed schemas', () => {
   const r = createRegistry({ quiet: true })

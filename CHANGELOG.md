@@ -4,11 +4,15 @@
 
 ## 未发布 — 2026-11-14（场景准备流程增强）
 
+- 检修修复：提供 topology_path 和 device 时，显式 port 必须与拓扑身份一致；未知/歧义设备和共享端口在整批连接前拒绝，覆盖 ensp_cli 与 ensp_labtest 共用预检。
+- LLDP 拓扑读取遍历同一 line 下全部 interfacePair，兼容 destIndex；缺失/损坏端点保留 unresolved，避免并行链路漏检后误报 MATCH。
+- 拓扑生成拒绝非连续 IPv4 掩码、路由器上被忽略的 pc 参数和非布尔 auto_layout。园区蓝图 EDGE1 到 FW1 的直连地址在融合层修正为 10.1.249.2/24，保留原样上游文件并在生成说明中注明原值与原因。
 - 按上游 lizi600jin/dsh-ensp 提交 `9f1452bb8a5448f1f26283159fb02752f21ac0b2` 原样同步 50 个场景与蓝图，保留 GPL 来源声明。
 - `ensp_scenarios` 增加设备、链路、地址表与生成支持原因；`ensp_build scenario_id` 支持蓝图拓扑和地址配置预览计划，不改变 19 个统一工具入口。
 - 新增 `ensp-fusion-lab scenario`：独立目录内生成拓扑、指导、地址表、配置骨架、预览计划与清单；47 个蓝图可生成，Router/AP6050 相关 3 场景明确拒绝生成。
 - 共用现有严格拓扑生成校验；补全 DHCP PC 动态参数、IPv4/IPv6 CIDR 校验、IPv6/Vlanif 前置命令，并将 Server 地址写入原生启动参数。
 - 本轮保留 1.1.3 包版本，新增能力属于未发布源码；未将离线生成、自动测试当作现场网络验收。用法与边界见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。
+- 检修验证：323 项 Node 测试、24 项 MCP 冒烟、插件检查、106 文件逐一 SHA256 校验与离线安装、DSH 0.2.2-rc.3 隔离宿主检查通过；现场冷 ARP 丢包、约 1.94 Mbps 瓶颈和指定 S5700 TCP 隔离故障仍未解决，见[已知问题](docs/KNOWN-ISSUES.zh-CN.md)。
 
 ## 1.1.3 — 2026-11-14（DSH rc.3 兼容修复，npm 未发布）
 
