@@ -2,6 +2,8 @@
 
 **面向华为 eNSP 的网络实验自动化插件，统一提供 DSH、MCP 和命令行入口。**
 
+本项目 **dsh-ensp-fusion** 基于开源项目进行二次开发与融合增强。其中，拓扑构建、解析与实验场景模块复用了 **lizi600jin** 的 [dsh-ensp](https://github.com/lizi600jin/dsh-ensp)；基础 GUI、控制台与文档流程经 ENSPLB 增强实现继承自 **YunoSeng** 的 [dsh-ensp](https://github.com/YunoSeng/dsh-ensp)。感谢原作者提供的基础实现。本项目整体采用 **GPL-3.0-or-later**，保留上游作者署名与许可声明，详见[来源与许可](#来源与许可)。
+
 将拓扑构建、设备配置、协议检查、业务探测和报告取证连接成一套可重复执行的实验流程。适用于网络教学、协议实验、园区方案验证，以及需要通过 AI 客户端调用 eNSP 的开发者。
 
 - **统一调用**：三个入口复用同一组 19 个工具，配套 23 个实验指导和 2 个 DSH 技能。
@@ -206,6 +208,29 @@ npm run check:dsh -- --app "C:/path/to/DeepSeek Harness.exe"
 
 ## 来源与许可
 
-项目融合 YunoSeng 基础自动化与文档流程、ENSPLB 设备会话和验收增强，以及 lizi600jin 的拓扑与场景模块；在统一入口上补充诊断、链路核对、业务探测及验收恢复能力。来源和变更见 [NOTICE.md](NOTICE.md)。
+### 上游项目与作者署名
 
-整体采用 **GPL-3.0-or-later**，保留 MIT 及上游许可声明。详见 [LICENSE](LICENSE)、[LICENSE-MIT](LICENSE-MIT) 和 [上游许可证](upstream/lizi600jin/LICENSE)。
+本项目包含上游代码复用与修改，来源如下：
+
+| 来源 | 作者或来源标识 | 复用与衍生内容 | 保留的许可 |
+| --- | --- | --- | --- |
+| [dsh-ensp](https://github.com/lizi600jin/dsh-ensp) | lizi600jin | 拓扑构建、解析及实验场景模块，通过适配层接入融合版 | [GPL-3.0-or-later](upstream/lizi600jin/LICENSE) |
+| [dsh-ensp](https://github.com/YunoSeng/dsh-ensp) | YunoSeng | 经 ENSPLB 增强实现接入的基础 GUI、控制台、拓扑编辑与文档流程 | [MIT 原始声明](LICENSE-MIT) |
+| ENSPLB 增强实现 | 详见来源记录 | 设备会话、错误处理、保存确认、就绪检测与只读验收等增强 | 随来源保留相关声明 |
+
+融合版在上述实现上增加统一工具注册与 DSH/MCP/CLI 适配，并扩展诊断、LLDP 链路核对、业务探测、工程检查点、脱敏日志导出及验收恢复流程。来源与修改说明见 [NOTICE.md](NOTICE.md)及[源码融合设计](docs/ANALYSIS.zh-CN.md)。这些扩展不改变上游代码的作者归属。
+
+### 开源协议与再分发
+
+本项目整体采用 **[GPL-3.0-or-later](LICENSE)**，即 GNU GPL 第 3 版或其后续版本。遵循 lizi600jin/dsh-ensp 的来源署名要求，修改或再次分发本项目时应：
+
+1. 保留原有版权、许可及无担保声明，随附完整 `LICENSE`，并保留上游许可证与适用的 MIT 声明。
+2. 在源码及随附文档中保留原项目名称 **dsh-ensp**、作者 **lizi600jin** 及仓库地址 **[https://github.com/lizi600jin/dsh-ensp](https://github.com/lizi600jin/dsh-ensp)**；同时保留其他来源的署名与许可。
+3. 对外分发基于本项目形成的衍生作品时，遵循 **GPL-3.0-or-later**，并按 GPL 的适用条款向接收者提供对应源码或获取方式。
+4. 对修改过的文件作出明确的修改说明并记录相关日期，保留来源与变更记录。
+
+仅自行运行或作不对外分发的私人修改，不触发向他人提供源码的分发义务。以上为项目许可说明，具体权利与义务以 [LICENSE](LICENSE) 全文为准。保留原 MIT 声明用于记录对应代码的原始授权，不表示融合版整体改用 MIT，也不免除 GPL 对衍生作品的适用要求。
+
+### 致谢
+
+感谢 **lizi600jin**、**YunoSeng** 及 ENSPLB 增强实现的贡献者。本项目不包含华为 eNSP 本体、设备镜像或虚拟磁盘；相关软件与素材由使用者自行准备，并遵守各自许可。
