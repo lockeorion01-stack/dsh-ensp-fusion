@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { generateLab, writeTopologyDiagram } from '../lib/lab-plan.js'
+import { generateScenarioLab } from '../lib/scenario-lab.js'
 import { resolve } from 'node:path'
 
 const HELP = `eNSP lab helpers (generate/diagram: offline, no extra runtime dependencies)
 
 Usage:
   node bin/dsh-ensp-lab.mjs generate --plan <json> --out <new-directory>
+  node bin/dsh-ensp-lab.mjs scenario --id <scenario-id> --out <new-directory> [--first-com-port <port>]
   node bin/dsh-ensp-lab.mjs diagram --topology <existing.topo> --out <new.mmd>
   node bin/dsh-ensp-lab.mjs test --plan <acceptance.json> --out <report-prefix> [--workspace <dir>]
   node bin/dsh-ensp-lab.mjs --help
@@ -27,6 +29,12 @@ Generate JSON contract:
   unique integers 1..65535, with 0 allowed for PCs (multiple PC zeros allowed).
 
 Outputs and limits:
+  scenario uses a bundled blueprint to create topology.topo, addressing.json,
+  scenario.md and manifest.json in a new directory (parent must exist).
+  Addressed scenarios also produce numbered .cfg files and cli-plan.json for
+  ensp_cli with dry_run:true and save:false. Use that directory as workspace.
+  This is addressing only; complete protocol, VLAN and security configuration
+  yourself. Unsupported models fail before output creation. No devices start.
   generate validates before writing; refuses any existing output directory.
   It copies topology bytes unchanged to topology.topo, writes plan.json with
   devices {device,port,commands,expect?,system_view?,save?}, and command-only
@@ -64,9 +72,9 @@ Example (from repository root):
 
 function argumentsOf(args) {
   const [command, ...rest] = args
-  if (!['generate', 'diagram', 'test'].includes(command)) throw new Error(`unknown subcommand: ${command ?? '(missing)'}`)
-  const input = command === 'diagram' ? 'topology' : 'plan'
-  const allowed = command === 'test' ? [input, 'out', 'workspace'] : [input, 'out']
+  if (!['generate', 'scenario', 'diagram', 'test'].includes(command)) throw new Error(`unknown subcommand: ${command ?? '(missing)'}`)
+  const input = command === 'diagram' ? 'topology' : command === 'scenario' ? 'id' : 'plan'
+  const allowed = command === 'test' ? [input, 'out', 'workspace'] : command === 'scenario' ? [input, 'out', 'first-com-port'] : [input, 'out']
   const options = {}
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i].slice(2)
@@ -76,12 +84,16 @@ function argumentsOf(args) {
     options[key] = rest[i + 1]
   }
   if (!options[input] || !options.out) throw new Error(`${command} requires --${input} and --out`)
+  if (options['first-com-port'] !== undefined) {
+    options.first_com_port = Number(options['first-com-port'])
+    delete options['first-com-port']
+  }
   return { command, options }
 }
 
 const args = process.argv.slice(2)
 if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))
-    || (args.length === 2 && ['generate', 'diagram', 'test'].includes(args[0]) && ['--help', '-h'].includes(args[1]))) {
+    || (args.length === 2 && ['generate', 'scenario', 'diagram', 'test'].includes(args[0]) && ['--help', '-h'].includes(args[1]))) {
   console.log(HELP)
 } else {
   try {
@@ -101,9 +113,9 @@ if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]
       console.log(JSON.stringify(report, null, 2))
       process.exitCode = report.ok ? 0 : 1
     } else {
-      const result = await (command === 'generate' ? generateLab(options) : writeTopologyDiagram(options))
+      const result = await (command === 'generate' ? generateLab(options) : command === 'scenario' ? generateScenarioLab(options) : writeTopologyDiagram(options))
       for (const warning of result.warnings ?? []) console.error(`Warning: ${warning}`)
-      console.log(`${command === 'generate' ? 'Generated lab' : 'Wrote diagram'}: ${result.out}`)
+      console.log(`${command === 'diagram' ? 'Wrote diagram' : 'Generated lab'}: ${result.out}`)
     }
   } catch (error) {
     console.error(`Error: ${error.message}\nRun node bin/dsh-ensp-lab.mjs --help for usage.`)

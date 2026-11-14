@@ -128,7 +128,9 @@ export const ICON = { w: 86, h: 86, left: -16.2, right: 70.2, top: -16.2, bottom
  * Without it eNSP still shows the PC but with no address, which breaks the
  * "ping between the two PCs" step.
  */
-function pcSettings({ ip = '192.168.10.1', mask = '255.255.255.0', gateway = '192.168.10.254', dns = '0.0.0.0', mac } = {}) {
+// Fusion modification 2026-11-14: preserve DHCP intent from scenario blueprints.
+function pcSettings({ ip = '192.168.10.1', mask = '255.255.255.0', gateway = '192.168.10.254', dns = '0.0.0.0', mac, dhcp = false } = {}) {
+  if (dhcp) ip = mask = gateway = dns = '0.0.0.0'
   const macAddr = mac ?? `54-89-98-${Array.from({ length: 3 }, () =>
     Math.floor(Math.random() * 256).toString(16).toUpperCase().padStart(2, '0')).join('-')}`
   return (
@@ -136,7 +138,7 @@ function pcSettings({ ip = '192.168.10.1', mask = '255.255.255.0', gateway = '19
     '  -simpc_mc_dstip 0.0.0.0  -simpc_mc_dstmac 00-00-00-00-00-00' +
     `  -simpc_dns1 ${dns}  -simpc_dns2 0.0.0.0` +
     '  -simpc_ipv6 ::  -simpc_prefix 128  -simpc_gatewayv6 ::' +
-    '  -simpc_dhcp_state 0  -simpc_dhcpv6_state 0  -simpc_dns_auto_state 0 '
+    `  -simpc_dhcp_state ${dhcp ? 1 : 0}  -simpc_dhcpv6_state 0  -simpc_dns_auto_state ${dhcp ? 1 : 0} `
   )
 }
 

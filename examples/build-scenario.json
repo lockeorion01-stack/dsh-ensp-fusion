@@ -1,0 +1,5 @@
+{
+  "scenario_id": "ospf-single",
+  "output_path": "ospf-single.topo",
+  "first_com_port": 2000
+}

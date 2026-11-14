@@ -64,11 +64,17 @@ async function verify(modules) {
       })).results[0].result
       const scenarios = await call('ensp_scenarios', { query: 'ospf' })
       assert.equal(scenarios.isError, false)
-      assert.equal(JSON.parse(scenarios.value.data).total, 23)
+      assert.equal(JSON.parse(scenarios.value.data).total, 50)
       assert.deepEqual(JSON.parse(scenarios.content[0].text), scenarios.value)
       const built = await call('ensp_build', { output_path: 'host.topo', devices: [{ name: 'R1', model: 'AR2220' }] })
       assert.equal(built.isError, false)
       assert.equal(built.value.ok, true)
+      const scenarioBuilt = await call('ensp_build', { output_path: 'scenario.topo', scenario_id: 'ospf-single' })
+      assert.equal(scenarioBuilt.isError, false)
+      const scenarioData = JSON.parse(scenarioBuilt.value.data)
+      assert.equal(scenarioData.summary.devices, 3)
+      assert.equal(scenarioData.cli_plan.dry_run, true)
+      assert.equal((await call('ensp_cli', scenarioData.cli_plan)).isError, false)
       const topo = await call('ensp_topo', { action: 'list', topology_path: 'host.topo' })
       assert.equal(topo.isError, false)
       assert.ok(topo.content[0].text.includes('R1'))
@@ -84,7 +90,7 @@ async function verify(modules) {
       assert.ok(!(await ctx.systemPrompt.assemble()).sections.some(s => s.name === 'ensp:automation'))
       return {
         ok: true, version: manifest.version, pluginRoot, runtime, compatibility,
-        checks: ['host compatibility without exemptions', 'verified prerelease compatibility boundaries', 'old manifests rejected', '19 tools registered', '2 skills registered and loaded', 'system prompt assembled', 'native executor scenario/build/topology calls', 'ok:false propagated as host error with evidence', 'invalid arguments rejected before writing', 'plugin unload cleanup'],
+        checks: ['host compatibility without exemptions', 'verified prerelease compatibility boundaries', 'old manifests rejected', '19 tools registered', '2 skills registered and loaded', 'system prompt assembled', 'native executor scenario/build/topology calls', 'blueprint generation and addressing-only CLI preview', 'ok:false propagated as host error with evidence', 'invalid arguments rejected before writing', 'plugin unload cleanup'],
         limits: ['Isolated host services; does not open or modify a user profile.', 'Does not call a model, open eNSP, or certify device business.'],
       }
     } finally { disposeExecutor() }

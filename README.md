@@ -6,13 +6,15 @@
 
 将拓扑构建、设备配置、协议检查、业务探测和报告取证连接成一套可重复执行的实验流程。适用于网络教学、协议实验、园区方案验证，以及需要通过 AI 客户端调用 eNSP 的开发者。
 
-- **统一调用**：三个入口复用同一组 19 个工具，配套 23 个实验指导和 2 个 DSH 技能。
+- **统一调用**：三个入口复用同一组 19 个工具，配套 50 个实验指导和 2 个 DSH 技能；47 个场景可直接生成拓扑与地址配置骨架。
 - **完整流程**：从生成拓扑、配置前探查、下发命令，到等待收敛、执行断言和整理证据。
 - **可追溯结果**：支持变更预览、控制台锁、工程配置检查点、控制台诊断和脱敏日志导出；验收区分通过、失败、错误和未执行。
 
 当前版本 **1.1.3**，支持 **DSH 0.2.2-rc.1 和 0.2.2-rc.3**。本版适配 rc.3 宿主，修复冻结参数、失败结果上报与工程配置资产检查，并完善 CLI 交互、控制台诊断和日志脱敏。详见 [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md)和[完整更新日志](CHANGELOG.md)。npm 尚未发布，请按下文使用源码或本地打包安装。
 
 > 软件检查与设备业务分别验收：当前软件测试及目标 DSH 宿主服务验证通过，**园区现场业务总验收仍为 FAIL**。冷 ARP 丢包、端到端吞吐瓶颈及指定 S5700 固件的 TCP 隔离问题仍待解决。见[验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md)和[已知问题](docs/KNOWN-ISSUES.zh-CN.md)。
+
+**未发布源码增强**：本轮对照上游 0.8.0，补充 50 场景蓝图、按场景生成拓扑及地址配置预览。包版本暂保持 1.1.3，历史部署和现场结果仍对应当时构建；新增能力用法和边界见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。
 
 ## 能做什么
 
@@ -68,6 +70,16 @@ node bin/ensp-fusion.mjs call ensp_build examples/build-router-pair.json $Worksp
 
 输出为 `$Workspace/router-pair.topo`，包含两台相连的 AR2220。构建器拒绝覆盖已有输出；生成拓扑不会启动设备。运行时需要 eNSP 和配套镜像。已有工程迁移时，应同时保留 `.topo` 与配套设备目录。
 
+也可按场景生成独立实验目录（输出目录必须不存在）：
+
+```powershell
+$Lab = Join-Path $env:TEMP ('ensp-ospf-' + [guid]::NewGuid().ToString('N'))
+node bin/dsh-ensp-lab.mjs scenario --id ospf-single --out $Lab
+node bin/ensp-fusion.mjs call ensp_cli (Join-Path $Lab 'cli-plan.json') $Lab
+```
+
+生成拓扑、地址表、实验指导、逐设备配置骨架和文件清单；最后一条命令执行默认 `dry_run:true` 的配置预览。协议、VLAN 端口及安全策略需按指导补全。`ppp-hdlc`、`wlan-basic`、`wlan-roaming` 因 Router/AP6050 未适配而明确拒绝生成，详见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。
+
 ### 3. 选择调用入口
 
 **DSH 插件**：在源码根目录运行 `npm pack --ignore-scripts`，然后将生成的包安装到实际使用的 profile。以下以 `desktop` 为例：
@@ -114,8 +126,8 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 | --- | --- | --- |
 | `ensp_status` | 实例发现、桥接检查、拓扑和控制台探测 | 端口开放后仍需确认设备就绪 |
 | `ensp_topo` | 离线读取或修改设备名、IPv4、控制台端口等 | 修改文件后，运行现场需另行载入 |
-| `ensp_build` | 按设备和链路生成新拓扑 | 拒绝覆盖，不启动设备 |
-| `ensp_scenarios` | 搜索和读取 23 个实验指导 | 指导需要结合设备和固件形成配置 |
+| `ensp_build` | 按设备/链路或 scenario_id 生成新拓扑 | 场景模式返回地址配置预览计划；拒绝覆盖，不启动设备 |
+| `ensp_scenarios` | 搜索和读取 50 个实验指导、蓝图与地址表 | 47 个蓝图可生成，其余明确标注原因；配置需按固件补全 |
 | `ensp_inspect` | 采集版本、配置、接口、路由和 LLDP | 配置前只读探查，保留逐命令证据 |
 | `ensp_cli` | 认证、预览、配置下发、断言、保存与显式恢复 | 失败时可能已有部分配置生效 |
 | `ensp_wait` | 等待指定回显、OSPF Full 邻居或 OSPF 路由 | 使用明确条件和超时 |
@@ -200,6 +212,7 @@ npm run check:dsh -- --app "C:/path/to/DeepSeek Harness.exe"
 | --- | --- |
 | [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md) / [更新日志](CHANGELOG.md) | DSH rc.3 兼容修复、升级及历史变更 |
 | [部署手册](docs/DEPLOYMENT.zh-CN.md) | DSH/MCP/CLI 接入、依赖与排错 |
+| [场景实验准备](docs/SCENARIO-LABS.zh-CN.md) | 50 场景、47 蓝图生成、地址配置与当前限制 |
 | [统一验收](docs/ACCEPTANCE-RUNNER.zh-CN.md) / [变更管理](docs/CHANGE-MANAGEMENT.zh-CN.md) | 计划、断言、日志和恢复 |
 | [验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md) / [已知问题](docs/KNOWN-ISSUES.zh-CN.md) | 成功范围、失败项和未测项 |
 | [可靠性修复](docs/RELIABILITY-HARDENING.zh-CN.md) / [模块实现记录](docs/REMAINING-MODULES.zh-CN.md) | 实现与验证过程 |

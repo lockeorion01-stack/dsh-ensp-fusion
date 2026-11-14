@@ -38,8 +38,8 @@ await check('MCP tool schemas and local scenario call', async () => {
   const r=createRegistry({workspace:root})
   for(const tool of r.tools){assert.equal(tool.inputSchema.type,'object');assert.equal(typeof tool.handler,'function')}
   const result=await r.tools.find(t=>t.name==='ensp_scenarios').handler({query:'ospf'},r.exec)
-  assert.equal(result.ok,true);assert.equal(JSON.parse(result.data).total,23)
-  return {tools:r.tools.length,scenarios:23}
+  assert.equal(result.ok,true);assert.equal(JSON.parse(result.data).total,50)
+  return {tools:r.tools.length,scenarios:50}
 })
 await check('installed Node dependencies', async () => {
   const npm=process.platform==='win32'?'npm.cmd':'npm'

@@ -16,7 +16,7 @@ test('unified registry has nineteen unique tools and closed schemas', () => {
   const r = createRegistry({ quiet: true })
   assert.equal(r.tools.length,19); assert.equal(new Set(r.tools.map(t => t.name)).size,19)
   const build = r.tools.find(t => t.name === 'ensp_build')
-  assert.deepEqual(build.inputSchema.required, ['output_path','devices'])
+  assert.deepEqual(build.inputSchema.required, ['output_path'])
   assert.deepEqual(build.inputSchema.properties.devices.items.required, ['name','model'])
 })
 test('DSH registers both workflow skills and the same nineteen tools', () => {
@@ -67,7 +67,7 @@ test('scenarios and generated topology integrate with MCP resources', async t =>
   async function call(method, params) { let response; await server.handleMessage({jsonrpc:'2.0', id:1, method, params}, r => response = r); return response }
   const scenarios = await call('tools/call', { name:'ensp_scenarios', arguments:{query:'ospf'} })
   const result = JSON.parse(scenarios.result.content[0].text)
-  assert.equal(JSON.parse(result.data).total, 23)
+  assert.equal(JSON.parse(result.data).total, 50)
   assert.ok(JSON.parse(result.data).scenarios.length)
   await call('tools/call', {name:'ensp_build', arguments:{...args(), output_path:'lab.topo'}})
   const topo = await call('tools/call', {name:'ensp_topo', arguments:{action:'list',topology_path:'lab.topo'}})

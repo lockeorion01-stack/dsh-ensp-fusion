@@ -5,6 +5,7 @@ description: Fusion-specific topology construction, scenarios and convergence wo
 
 先使用 `ensp_scenarios` 获取实验指导，再用 `ensp_build` 创建新拓扑；已有拓扑优先 `ensp_topo`。
 生成器提供设备与 VRP 接口链路，不下发配置。场景是 brief，命令需要按设备确认。
+`ensp_scenarios` 现在提供 50 个指导；精确 id 同时返回蓝图、地址表与 generation.supported/reasons。`ensp_build scenario_id` 使用蓝图创建拓扑并返回地址配置 cli_plan（默认 dry_run:true，每台 save:false），与 devices/links 互斥。47 个蓝图可生成；Router/AP6050 尚未注册，ppp-hdlc、wlan-basic、wlan-roaming 明确拒绝生成。先预览并按固件补全路由协议、VLAN 端口、隧道和安全配置。DHCP PC 使用原生动态参数，Server IPv4 写入启动参数而非 VRP 命令；缺省服务器网关为未配置并有提示。完整离线准备目录使用 ensp-fusion-lab scenario，详见 docs/SCENARIO-LABS.zh-CN.md。
 新建拓扑后调用 `ensp_topo action:list` 更新上下文。
 现场操作先 `ensp_status`，GUI 只负责必要的启停和取证，配置走 `ensp_cli`。
 配置结束应核对保存状态，再 `ensp_wait` 等待协议收敛，随后 `ensp_labtest` 生成明确断言的验收证据。
