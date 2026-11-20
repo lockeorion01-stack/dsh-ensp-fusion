@@ -79,11 +79,11 @@ npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整�
 
 MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作为命令行选项。GUI批次可使用工具timeout_ms；配置API另有timeoutMs。
 
-1.1.4 候选初始化后应列出19工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的磁盘快照，不是当前 GUI 工程身份，拓扑变更后需重新list。新工具与凭据引用见 [1.1.2 说明](releases/1.1.2.zh-CN.md)，当前候选及日志导出见 [1.1.4 说明](releases/1.1.4.zh-CN.md)。
+1.1.6 的 MCP 服务初始化后应列出 19 个工具。可读取 `ensp://workspace` 和 `ensp://topology/current`。后者保存最近一次成功调用 `ensp_topo` 的 `list` 动作时读取的磁盘快照。修改拓扑后可再次调用 `list` 刷新。
 
 ## 4. DSH接入
 
-1.1.4 候选支持 **DSH 0.2.2-rc.1、0.2.2-rc.3、0.2.2-rc.5**，peer 依赖为 `@deepseek-ai/dsh-tools: 0.2.2-rc.1 || 0.2.2-rc.3 || 0.2.2-rc.5` 和 `@deepseek-ai/schemastery@3.19.0`，锁文件使用 rc.3。1.1.2 仅声明 rc.1，会被 rc.3 宿主拦截；升级到本次源码或修复包，不要编辑宿主或授予版本豁免。rc.5 在 M2.1 阶段通过本机隔离宿主核验；未扩大为 rc.4/rc.6/正式版通配支持。其他 DSH 版本须另行核验，安装及隔离宿主检查见 [1.1.3 修复说明](releases/1.1.3.zh-CN.md)。
+1.1.6 的 DSH 依赖声明支持 **0.2.2-rc.1、rc.3 和 rc.5**。锁文件使用 rc.3 SDK，rc.5 隔离宿主实测注册了 19 个工具和 3 个技能。安装候选包时，在目标 profile 的插件管理中选择 `dsh-ensp-fusion-1.1.6.tgz`，按宿主提示重载，再调用 `ensp_status` 核对 `build.version`、`build.root` 和 `build.fingerprint`。下方 `link:` 配置供直接从源码加载的用户使用。
 
 在现有profile合并下列片段，保留其他依赖和bundle：
 
@@ -142,6 +142,21 @@ call的参数JSON相对shell当前目录读取；末尾workspace控制工具内�
 
 generate中的topology相对计划文件解析，只接受严格JSON模板及简单变量，不是YAML/Jinja执行器；只复制topo，不打包外部磁盘。配置生成计划和只读验收计划不能混用。完整参数见bin/dsh-ensp-lab.mjs --help。
 
+### 修正已有拓扑的标签覆盖
+
+在 DSH 中可以说“检查 campus.topo 的标签遮挡，预览调整并另存为 campus.labels.topo”。绘图技能使用 `ensp_topo`。表中每行都是一次调用的参数，路径相对于实验工作区。
+
+| 步骤 | 工具参数 |
+| --- | --- |
+| 检查原图 | `{"action":"layout-inspect","topology_path":"campus.topo"}` |
+| 预览移动提议 | `{"action":"layout-preview","topology_path":"campus.topo"}` |
+| 写出副本 | `{"action":"layout-apply","topology_path":"campus.topo","out_path":"campus.labels.topo"}` |
+| 回读副本 | `{"action":"layout-inspect","topology_path":"campus.labels.topo"}` |
+
+前两步只读。写出副本时，输出文件必须是新的 `.topo` 文件。示例把副本放在原图旁，保留与设备资产目录的相对位置。用回读的 `layout.before.count` 对照预览的 `layout.after.count`，再比较原图和副本的 `layout.semanticHash`。若 `layout.unsupported` 有条目或 `layout.searchBudgetReached` 为真，请记录对应限制。
+
+在 eNSP 中打开副本，核对工程名和缩放，查看全图与核心交换机等密集区域。重点检查设备名是否压住图标、连线是否穿过端口文字，以及边缘文字是否被裁切。离线报告始终返回 `nativeVisualVerified: false`，原生截图复核单独记录。[绘图技能](../skills/ensp-topology-drawing/SKILL.md)
+
 ## 6. 权限和实际设备
 
 eNSP高权限而调用方低权限时，窗口消息可能被UIPI拒绝。侧车通过ShellExecuteW(runas)请求提权；默认UAC可能每个job都需确认，serve可减少重复启动。不要把关闭UAC作为安装前提。拒绝授权应作为失败处理。
@@ -156,7 +171,7 @@ GUI依赖已解锁的交互桌面。锁屏、断开的远程会话、模态窗�
 | --- | --- |
 | ERR_MODULE_NOT_FOUND | 源码根目录按锁文件npm ci，检查peer依赖，不只复制入口 |
 | ENOENT，打开旧 local-plugins 路径的 index.js 失败 | 检查实际目录是否为空或多嵌套 package/；从已验证包恢复完整副本。安装来源/真实目录变化时保留旧路径，正常退出并完整重启 DSH，核对运行中 build.root 与 fingerprint；不能直接归因于兼容性或包损坏 |
-| 旧插件与 DSH rc.1/rc.3 不兼容 | 更新到 1.1.3 源码/修复包并解析依赖，重新加载插件后核对版本与构建指纹；见 1.1.3 发布说明 |
+| 旧插件与 DSH rc.1/rc.3 不兼容 | 安装 1.1.6 候选包，重载目标 profile，再核对加载版本、路径和构建指纹 |
 | node找不到/版本不符 | 检查客户端PATH，必要时用node.exe绝对路径 |
 | Python导入失败 | 用实际配置解释器执行-m pip和import测试 |
 | 桥失败/1223 | 检查解释器、权限和是否拒绝UAC |

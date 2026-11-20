@@ -1,6 +1,6 @@
 # 已知问题与能力边界
 
-截至2026-11-14本轮验收。三台USG真实VRP、选定current/saved、save及同路径正常关闭重开验收 **PASS**，重开后分别39/39/23项匹配，reloadVerified=true；新进程、三台新VM实例和fresh界面均已独立观察。财务实际current/next为原生fwcw.cfg且文件6425字节，已证明该自定义名正确导出加载，不将其列为缺陷。**园区整体业务仍FAIL**，DHCP端点租约、Server system_mac、ISP资产与业务待验保留。后续已恢复缺失安装入口，运行中工具回读确认切到GitHub安装副本，构建指纹与已修源码一致；见 [部署核验](releases/1.1.3.zh-CN.md#后续部署核验)和 [USG 与工程重开验收记录](USG-REOPEN-ACCEPTANCE-20261114.zh-CN.md)。
+2026-11-14 的园区现场验收记录如下。三台USG真实VRP、选定current/saved、save及同路径正常关闭重开验收 **PASS**，重开后分别39/39/23项匹配，reloadVerified=true；新进程、三台新VM实例和fresh界面均已独立观察。财务实际current/next为原生fwcw.cfg且文件6425字节，已证明该自定义名正确导出加载，不将其列为缺陷。**园区整体业务仍FAIL**，DHCP端点租约、Server system_mac、ISP资产与业务待验保留。后续已恢复缺失安装入口，运行中工具回读确认切到GitHub安装副本，构建指纹与已修源码一致；见 [部署核验](releases/1.1.3.zh-CN.md#后续部署核验)和 [USG 与工程重开验收记录](USG-REOPEN-ACCEPTANCE-20261114.zh-CN.md)。
 
 | 编号 | 状态 | 问题及影响 | 后续完成条件 |
 | --- | --- | --- | --- |
@@ -16,6 +16,12 @@
 | KI-10 | 三台选定配置持久化与重开通过 | 正常关闭、磁盘导出及同路径重开回读闭环。财务实际current/next均fwcw.cfg，文件6425字节且23项匹配；关闭前临时next vrpcfg设置未被原生序列化保留，不宣称文件名归一化，也不把原自定义文件认作故障 | 本项三USG选定配置验收已完成；其他配置字段、园区业务及更大范围恢复需另验 |
 | KI-11 | 源码与部署已核验，其余实机证据待补 | flash尾随日志、唯一USG .cfg识别、多候选ambiguous与检查点保留全部已修，308项Node及24项MCP通过；插件、rc.3隔离宿主及离线打包检查通过。后续安装副本已同步，运行中root与fingerprint匹配；13交换机仅内容复核未验冷加载 | 补ISP持久资产与13交换机冷加载。18CLI资产汇总仍false，不能据此说13交换机损坏 |
 | KI-12 | 原生保存后端点差异待验 | 保存前后34设备、38链路及13交换机配置内容保持；PC2—PC9仍启用DHCP，但序列化IPv4/掩码/网关归零；四Server静态网络和eth保留，system_mac属性变化，未确定其运行元数据语义 | 不回灌旧动态租约或盲改MAC；独立验证重获租约、实际端点身份及业务，不将三USG配置通过扩大到所有端点 |
+
+## 1.1.6 标签遮挡与原生显示
+
+`ensp_topo` 估算文字和图标占用的画布空间，并用直线近似连线。字体、缩放、DPI 和窗口裁切会影响实际显示。离线报告的 `nativeVisualVerified` 始终为 `false`，原生截图复核单独记录。若副本回读为零但仍能看到遮挡，请记录文件名、缩放和相邻设备或接口，保留全图及受影响区域的截图。
+
+本次样本已在 eNSP 打开并截图。历史 eNSP 崩溃仍缺少可定位根因的原生调用栈，园区业务仍有冷 ARP、吞吐和 TCP 隔离失败项。见[绘图验证记录](releases/1.1.6.zh-CN.md)和[崩溃日志复核](CRASH-AUDIT-20261119.zh-CN.md)。
 
 ## 2026-11-20 M3 文件与错误证据修补
 
@@ -44,4 +50,4 @@ Windows Application 事件确认主界面、PCServer/UDP 插件及 VBoxServer/CO
 - ensp_project 检查点是配置资产备份，不含 VM 磁盘；内嵌 ZIP 最新载荷不等于挂载配置。GUI 投递或保存框消失不等于工程加载/保存完成。
 - ensp_logexport 会展开嵌套 JSON 字符串，结构可能改变；原始输入日志无法由插件撤回。连续 Zstandard 需要 Node 22.15+，不支持时明确失败。
 
-USG历史通过范围、现场证据边界及恢复结果见[验收摘要](TOTAL-ACCEPTANCE.zh-CN.md)。当前升级见[1.1.2说明](releases/1.1.2.zh-CN.md)，历史兼容修复见[1.1.1说明](releases/1.1.1.zh-CN.md)。
+USG历史通过范围、现场证据边界及恢复结果见[验收摘要](TOTAL-ACCEPTANCE.zh-CN.md)。当前升级见 [1.1.6 说明](releases/1.1.6.zh-CN.md)，历史兼容修复见[1.1.1说明](releases/1.1.1.zh-CN.md)。
