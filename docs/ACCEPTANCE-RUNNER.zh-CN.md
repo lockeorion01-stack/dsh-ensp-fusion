@@ -1,6 +1,6 @@
 # 统一验收与恢复
 
-入口 `ensp-fusion-accept` 将现有16个工具编排成一次独立验收，不增加 MCP 工具数量。
+入口 `ensp-fusion-accept` 将现有19个工具编排成一次独立验收，不增加 MCP 工具数量。
 
 ```powershell
 node bin/ensp-fusion-accept.mjs run examples/acceptance-plan.json C:/labs/ensp acceptance-runs
@@ -17,7 +17,7 @@ CLI 在执行前检查整份计划的工具、公开参数类型、必需字段�
 
 清理在变更调用前登记，失败、超时或可捕获的取消发生后按后进先出执行，清理使用独立于取消信号的执行路径。必须为部分执行也可能发生的变更提供恢复命令。清理只有执行成功后才允许整轮 PASS。可使用 `${run_dir}` 和 `${steps.<name>.<field>}` 引用此前结果；清理可引用本步骤结果，例如 `change_journal`。若调用抛错而没有返回日志路径，该引用无法解析，清理会明确报错；需要能够处理此情况的显式恢复方案。
 
-Ctrl+C/SIGTERM 请求停止后续步骤。当前设备工具不能硬取消正在执行的命令，验收期限也是停止后续调度的期限，实际结束可能晚于该期限；在途命令依赖其自己的连接/命令超时。清理不受该期限限制。强制终止进程、断电和系统崩溃不能执行 JavaScript finally；`status` 在原 PID 已退出时将未完成运行显示为 INTERRUPTED，不自动重放配置。PID 被复用时保守保留未完成状态，需人工检查，不将其判为通过。
+Ctrl+C/SIGTERM 会把取消信号传至控制台/桥并停止后续动作；计划 `deadline_ms` 向下收敛到各层剩余预算。清理使用独立的 `cleanup_deadline_ms`（默认30秒，范围1..3600000毫秒），继续遵循既有恢复 guard。原动作或此前清理为 unconfirmed 时，后续清理记为 SKIPPED_UNCONFIRMED，整轮为 UNCONFIRMED，recover 也拒绝冲突恢复。取消不能撤回已发出的命令或配置；原生调用、停止确认、资源回收及写盘可能使实际响应晚于动作预算，详见 [M2 交付说明](M2-IMPLEMENTATION.zh-CN.md)。强制终止进程、断电和系统崩溃不能执行 JavaScript finally；`status` 在原 PID 已退出时将未完成运行显示为 INTERRUPTED，不自动重放配置。PID 被复用时保守保留未完成状态，需人工检查，不将其判为通过。
 
 恢复入口仍为 `ensp_cli recover_from`。新变更日志保存成功的变更后配置指纹和设备软件/型号/sysname 指纹。恢复在同一控制台锁内重新读取配置和版本；身份不同或配置漂移时，在恢复命令之前拒绝执行，返回 `recovery_verified` 说明通过的校验。指纹依据未经脱敏的配置计算，日志只存哈希；凭据变化也能被检测。缺少 guard 的历史记录及不完整的变更后快照拒绝自动恢复。没有跳过校验的 force 选项。
 

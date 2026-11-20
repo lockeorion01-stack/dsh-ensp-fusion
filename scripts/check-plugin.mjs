@@ -28,7 +28,7 @@ await check('DSH registration contract', async () => {
   const tools=[],skills=[],sections=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:(...s)=>sections.push(s)}},Config({}))
   assert.equal(tools.length,19);assert.equal(new Set(tools.map(t=>t.name)).size,19)
-  assert.equal(skills.length,2);assert.ok(sections.length)
+  assert.equal(skills.length,3);assert.ok(sections.length)
   for(const skill of skills){assert.ok(skill.content);await access(skill.resourceBase.path)}
   const patch = await readFile(join(root,pkg.dsh.bundle.patch),'utf8')
   assert.match(patch,/name: dsh-ensp-fusion/)
@@ -53,7 +53,7 @@ await check('package contents and syntax', async () => {
   const r=spawnSync(npm,['pack','--dry-run','--ignore-scripts','--json'],{cwd:root,encoding:'utf8',shell:process.platform==='win32',windowsHide:true,timeout:15000})
   assert.equal(r.status,0,r.stderr)
   const files=JSON.parse(r.stdout)[0].files.map(f=>f.path)
-  for(const required of ['LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','lib/bridge.py','lib/launch.py','skills/ensp-fusion/SKILL.md'])assert.ok(files.includes(required),required)
+  for(const required of ['LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','lib/bridge.py','lib/launch.py','skills/ensp-fusion/SKILL.md','skills/ensp-topology-drawing/SKILL.md','skills/ensp-topology-drawing/references/layout-rules.md','lib/topology-layout.js'])assert.ok(files.includes(required),required)
   assert.ok(!files.some(f=>/^(node_modules|test-results)\//.test(f)))
   const scripts=files.filter(f=>/\.(mjs|js)$/.test(f))
   for(const file of scripts){const s=spawnSync(process.execPath,['--check',join(root,file)],{encoding:'utf8',windowsHide:true,timeout:5000});assert.equal(s.status,0,`${file}: ${s.stderr}`)}

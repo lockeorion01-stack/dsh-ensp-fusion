@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
 import { createRegistry } from '../mcp/server.js'
+import { operationSucceeded } from '../lib/operation-result.js'
+import { processCancellation } from '../lib/execution-control.js'
+const cancellation = processCancellation()
 
 async function main() {
   const [command, ...rest] = process.argv.slice(2)
@@ -18,8 +21,8 @@ async function main() {
   const tool = registry.tools.find(t => t.name === name)
   if (!tool) throw new Error(`unknown tool: ${name}`)
   const args = command === 'scenarios' ? { query: rest.join(' ') } : JSON.parse((await readFile(rest[1], 'utf8')).replace(/^\uFEFF/, ''))
-  const result = await tool.handler(args, registry.exec)
+  const result = await tool.handler(args, { ...registry.exec, entrypoint: 'cli', signal: cancellation.signal })
   process.stdout.write(JSON.stringify(result, null, 2) + '\n')
-  if (result.ok === false) process.exitCode = 1
+  if (!operationSucceeded(name, result)) process.exitCode = 1
 }
-main().catch(error => { process.stderr.write(error.message + '\n'); process.exitCode = 1 })
+main().catch(error => { process.stderr.write(error.message + '\n'); process.exitCode = 1 }).finally(() => { if (cancellation.signal.aborted) process.exitCode = 130; cancellation.dispose() })

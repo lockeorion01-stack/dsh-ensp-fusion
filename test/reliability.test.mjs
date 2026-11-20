@@ -115,6 +115,127 @@ test('checkpoint verifies content, refuses overwrite and reports missing or chan
   await assert.rejects(checkpointProject(path, join(project, 'escape', 'backup')), /outside/u)
 })
 
+test('AC version-header ZIP configuration is inspected without a sysname and AP absence remains unverified', async t => {
+  const root = await workspace(t), project = join(root, 'project'), path = join(project, 'wireless.topo')
+  await mkdir(join(project, 'ac'), { recursive: true }); await mkdir(join(project, 'ap'))
+  await writeFile(path, '<topo><dev id="ac" name="AC1" model="AC6005" com_port="2001"/><dev id="ap" name="AP1" model="AP6050" com_port="2002"/></topo>')
+  const text = '\r\n[V200R007C10SPC300]\r\n#\r\nvlan batch 10\r\n#\r\nreturn\r\n'
+  await writeFile(join(project, 'ac', 'vrpcfg.zip'), storedZip([['vrpcfg.cfg', text]]))
+  const report = await inspectProject(path, { expected: { AC1: ['vlan batch 10'] } })
+  assert.equal(report.ok, false)
+  assert.equal(report.devices[0].state, 'content_verified')
+  assert.equal(report.devices[0].configurationFormat, 'zip-vrpcfg')
+  assert.equal(report.devices[1].state, 'persistence_unverified')
+  assert.equal(report.devices[1].ok, false)
+  assert.equal(report.reloadVerified, false)
+  assert(!JSON.stringify(report).includes('vlan batch 10'), 'never return configuration content')
+  assert.equal((await inspectProject(path, { expected: { AC1: ['vlan batch 20'] } })).devices[0].state, 'expected_content_missing')
+  const copy = await checkpointProject(path, join(root, 'backup'))
+  assert.equal(copy.ok, false, 'an unknown AP is never ignored for aggregate success')
+  assert.equal(copy.assetCopyVerified, true)
+  assert.deepEqual(await readFile(join(root, 'backup', 'ac', 'vrpcfg.zip')), await readFile(join(project, 'ac', 'vrpcfg.zip')))
+  assert.equal(copy.assetManifest.directories.includes('ap'), true)
+  await writeFile(join(project, 'ap', 'vrpcfg.cfg'), '#\nsysname AP1\n#\n')
+  assert.equal((await inspectProject(path)).ok, true)
+})
+
+test('wireless corrupt, empty, ambiguous and nonconfiguration archives never pass', async t => {
+  const root = await workspace(t), project = join(root, 'project'), path = join(project, 'wireless.topo')
+  await mkdir(join(project, 'ac'), { recursive: true })
+  await writeFile(path, '<topo><dev id="ac" name="AC1" model="AC6005" com_port="2001"/></topo>')
+  const file = join(project, 'ac', 'vrpcfg.zip')
+  for (const text of ['[V200R007C10SPC300]', '[V200R007C10SPC300]\n#\n', '{"state":"ok"}', 'unrelated log']) {
+    await writeFile(file, storedZip([['vrpcfg.cfg', text]]))
+    assert.equal((await inspectProject(path)).devices[0].state, 'unrecognized_configuration')
+  }
+  await writeFile(file, '')
+  assert.equal((await inspectProject(path)).devices[0].state, 'empty')
+  const good = storedZip([['vrpcfg.cfg', '[V200R007C10SPC300]\n#\nvlan batch 10\n#\nreturn\n']])
+  const bad = Buffer.from(good); bad[40] ^= 1
+  for (const bytes of [bad, good.subarray(0, -5), storedZip([['log.txt', 'irrelevant']]), storedZip([['vrpcfg.cfg', 'sysname AC1'], ['dir/vrpcfg.cfg', 'sysname AC2']])]) {
+    await writeFile(file, bytes)
+    assert.equal((await inspectProject(path)).devices[0].state, 'invalid')
+  }
+  await writeFile(file, good)
+  await writeFile(join(project, 'ac', 'flash.efz'), embedded(zip))
+  const report = await inspectProject(path)
+  assert.equal(report.devices[0].state, 'ambiguous')
+  assert.equal(report.ok, false)
+  const copy = await checkpointProject(path, join(root, 'backup'))
+  assert.equal(copy.ok, false); assert.equal(copy.assetCopyVerified, true)
+  assert(copy.assetManifest.files.some(row => row.path === 'ac/vrpcfg.zip'))
+  assert(copy.assetManifest.files.some(row => row.path === 'ac/flash.efz'))
+})
+
+test('checkpoint includes non-console XML and ZIP assets and compare detects their changes', async t => {
+  const root = await workspace(t), project = join(root, 'project'), path = join(project, 'campus.topo')
+  for (const id of ['sw', 'server', 'empty']) await mkdir(join(project, id), { recursive: true })
+  await writeFile(path, '<topo><dev id="sw" name="SW1" model="S5700" com_port="8101"/><dev id="server" name="Server1" model="Server" com_port="0"/><dev id="empty" name="AP1" model="AP6050" com_port="0"/></topo>')
+  await writeFile(join(project, 'sw', 'flash.efz'), embedded(zip))
+  await writeFile(join(project, 'server', 'PC.xml'), '<PC ip="10.0.0.1"/>')
+  await writeFile(join(project, 'server', 'vrpcfg.zip'), zip)
+  const checkpoint = await checkpointProject(path, join(root, 'backup'))
+  assert.equal(checkpoint.ok, true); assert.equal(checkpoint.assetCopyVerified, true)
+  assert.equal(checkpoint.assetManifest.files.length, 4)
+  assert.deepEqual(checkpoint.assetManifest.directories, ['empty', 'server', 'sw'])
+  assert.equal(compareProject(checkpoint, await inspectProject(path)).ok, true)
+  await writeFile(join(project, 'server', 'PC.xml'), '<PC ip="10.0.0.2"/>')
+  assert(compareProject(checkpoint, await inspectProject(path)).mismatches.includes('configuration_asset_manifest_changed_or_unverified'))
+  await writeFile(join(project, 'server', 'PC.xml'), '<PC ip="10.0.0.1"/>')
+  await writeFile(join(project, 'server', 'vrpcfg.zip'), 'changed non-console asset')
+  assert.equal(compareProject(checkpoint, await inspectProject(path)).ok, false)
+  const outside = join(root, 'outside'); await mkdir(outside)
+  await symlink(outside, join(project, 'server', 'unsafe.cfg'), process.platform === 'win32' ? 'junction' : 'dir')
+  assert.equal((await inspectProject(path)).ok, false)
+  await assert.rejects(checkpointProject(path, join(root, 'unsafe-backup')), /symlink|escapes/u)
+})
+
+test('exact operation export preserves structured errors, skips and metadata while redacting all session secrets', async t => {
+  const root = await workspace(t), source = join(root, 'session.jsonl'), destination = join(root, 'evidence.json')
+  const operation = '1234-abcd', call = 'call-1:ptc:3'
+  const failure = { ok: false, failure: { phase: 'connect', kind: 'transport', message: 'ECONNREFUSED' }, skipped: ['display version'],
+    execution: { operation_id: operation, call_id: call, status: 'failed', tool: 'ensp_cli' }, notes: ['Synthetic-Secret!'] }
+  const rows = [
+    { type: 'tool/ptc-dispatch', data: { subCallId: call, name: 'ensp_cli', isError: true, error: { code: 'ENSP_OPERATION_FAILED' }, content: [{ type: 'text', text: JSON.stringify(failure) }] } },
+    { data: { arguments: JSON.stringify({ password: 'Synthetic-Secret!' }) } },
+    { type: 'tool/ptc-dispatch', data: { subCallId: call + '0', content: [{ type: 'text', text: JSON.stringify({ ...failure, execution: { operation_id: 'different', call_id: call + '0' } }) }] } },
+  ]
+  const original = rows.map(row => JSON.stringify(row)).join('\n') + '\n'
+  await writeFile(source, original)
+  const exported = await exportSanitizedLog(source, destination, { operationId: operation })
+  const text = await readFile(destination, 'utf8'), data = JSON.parse(text)
+  assert.equal(exported.structuredResults, 1); assert.equal(data.matchedRecords, 1)
+  assert.equal(data.results[0].result.failure.phase, 'connect')
+  assert.equal(data.results[0].result.failure.message, 'ECONNREFUSED')
+  assert.deepEqual(data.results[0].result.skipped, ['display version'])
+  assert.equal(data.results[0].result.execution.operation_id, operation)
+  assert(!text.includes('Synthetic-Secret!'))
+  assert.equal(await readFile(source, 'utf8'), original)
+  const byCall = join(root, 'by-call.json')
+  assert.equal((await exportSanitizedLog(source, byCall, { callId: call })).structuredResults, 1)
+  assert.equal(JSON.parse(await readFile(byCall, 'utf8')).matchedRecords, 1, 'selector is exact, not a prefix')
+  await assert.rejects(exportSanitizedLog(source, destination, { operationId: operation }), { code: 'EEXIST' })
+  await assert.rejects(exportSanitizedLog(source, join(root, 'missing.json'), { operationId: 'missing' }), /no exact/u)
+  await assert.rejects(readFile(join(root, 'missing.json')), { code: 'ENOENT' })
+  await assert.rejects(exportSanitizedLog(source, join(root, 'invalid.json'), { callId: call, operationId: operation }), /mutually exclusive/u)
+})
+
+test('exact export retains dispatch-only errors and metadata without fabricating result bodies', async t => {
+  const root = await workspace(t), source = join(root, 'session.jsonl')
+  await writeFile(source, [
+    { type: 'tool/ptc-dispatch', data: { subCallId: 'throw-1', name: 'ensp_cli', isError: true, error: { code: 'PATH_REJECTED' }, content: [{ type: 'text', text: 'path rejected' }] } },
+    { type: 'finished', operation_id: 'meta-1', call_id: 'meta-call', status: 'failed' },
+  ].map(x => JSON.stringify(x)).join('\n'))
+  const thrown = join(root, 'thrown.json'), metadata = join(root, 'metadata.json')
+  await exportSanitizedLog(source, thrown, { callId: 'throw-1' })
+  const data = JSON.parse(await readFile(thrown, 'utf8'))
+  assert.equal(data.structuredResults, 0); assert.equal(data.results[0].result, null)
+  assert.equal(data.results[0].error.code, 'PATH_REJECTED')
+  await exportSanitizedLog(source, metadata, { operationId: 'meta-1' })
+  const meta = JSON.parse(await readFile(metadata, 'utf8'))
+  assert.equal(meta.evidenceLevel, 'metadata-or-dispatch-only'); assert.deepEqual(meta.results, [])
+})
+
 test('USG custom cfg assets are checked and copied without claiming the startup pointer', async t => {
   const root = await workspace(t), project = join(root, 'project'), path = join(project, 'campus.topo')
   await mkdir(join(project, 'fw'), { recursive: true })
@@ -155,6 +276,30 @@ test('USG multiple cfg assets stay ambiguous and checkpoint preserves every cand
   await symlink(outside, join(project, 'fw', 'escape.cfg'), process.platform === 'win32' ? 'junction' : 'dir')
   assert.equal((await inspectProject(path)).devices[0].state, 'invalid')
   await assert.rejects(checkpointProject(path, join(root, 'unsafe-backup')), /symlink|escapes/u)
+})
+
+test('session prose, short credential echoes and exact dispatch selectors', async t => {
+  const root = await workspace(t), source = join(root, 'session.jsonl')
+  const rows = [
+    { description: 'A password is optional. Set password to a value. Record password changes.' },
+    { type: 'tool/ptc-dispatch', data: { subCallId: 'call-is-1', name: 'ensp_cli', content: ['echo ~! and p@ ss'] } },
+    { arguments: { commands: ['password ~!', 'local-user admin password cipher "p@ ss"'] } },
+  ]
+  await writeFile(source, rows.map(row => JSON.stringify(row)).join('\n'))
+  const destination = join(root, 'selected.json')
+  await exportSanitizedLog(source, destination, { callId: 'call-is-1' })
+  const artifact = JSON.parse(await readFile(destination, 'utf8'))
+  assert.equal(artifact.records[0].record.type, rows[1].type)
+  assert.equal(artifact.results[0].call_id, 'call-is-1')
+  assert.deepEqual(artifact.results[0].content, ['echo [REDACTED] and [REDACTED]'])
+  // A known credential may also occur inside the requested identifier.
+  rows.push({ password: 'is' })
+  await writeFile(source, rows.map(row => JSON.stringify(row)).join('\n'))
+  const second = join(root, 'masked-id.json')
+  await exportSanitizedLog(source, second, { callId: 'call-is-1' })
+  const masked = JSON.parse(await readFile(second, 'utf8'))
+  assert.equal(masked.records[0].record.type, rows[1].type)
+  assert.equal(masked.selector.call_id, 'call-[REDACTED]-1')
 })
 
 test('credential references hydrate frozen input without recording secrets and reject mixed inputs', async t => {

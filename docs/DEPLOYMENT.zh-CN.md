@@ -79,11 +79,11 @@ npm 包尚未发布（GitHub 侧为预发布 Release）；部署请使用完整�
 
 MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作为命令行选项。GUI批次可使用工具timeout_ms；配置API另有timeoutMs。
 
-1.1.3 初始化后应列出19工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的磁盘快照，不是当前 GUI 工程身份，拓扑变更后需重新list。新工具与凭据引用见 [1.1.2 说明](releases/1.1.2.zh-CN.md)，当前兼容性见 [1.1.3 说明](releases/1.1.3.zh-CN.md)。
+1.1.4 候选初始化后应列出19工具。资源ensp://workspace、ensp://topology/current可供读取。后者是最近成功ensp_topo action:list的磁盘快照，不是当前 GUI 工程身份，拓扑变更后需重新list。新工具与凭据引用见 [1.1.2 说明](releases/1.1.2.zh-CN.md)，当前候选及日志导出见 [1.1.4 说明](releases/1.1.4.zh-CN.md)。
 
 ## 4. DSH接入
 
-1.1.3 支持 **DSH 0.2.2-rc.1、0.2.2-rc.3**，peer 依赖为 `@deepseek-ai/dsh-tools: 0.2.2-rc.1 || 0.2.2-rc.3` 和 `@deepseek-ai/schemastery@3.19.0`，锁文件使用 rc.3。1.1.2 仅声明 rc.1，会被 rc.3 宿主拦截；升级到本次源码或修复包，不要编辑宿主或授予版本豁免。其他 DSH 版本须另行核验，安装及隔离宿主检查见 [1.1.3 修复说明](releases/1.1.3.zh-CN.md)。
+1.1.4 候选支持 **DSH 0.2.2-rc.1、0.2.2-rc.3、0.2.2-rc.5**，peer 依赖为 `@deepseek-ai/dsh-tools: 0.2.2-rc.1 || 0.2.2-rc.3 || 0.2.2-rc.5` 和 `@deepseek-ai/schemastery@3.19.0`，锁文件使用 rc.3。1.1.2 仅声明 rc.1，会被 rc.3 宿主拦截；升级到本次源码或修复包，不要编辑宿主或授予版本豁免。rc.5 在 M2.1 阶段通过本机隔离宿主核验；未扩大为 rc.4/rc.6/正式版通配支持。其他 DSH 版本须另行核验，安装及隔离宿主检查见 [1.1.3 修复说明](releases/1.1.3.zh-CN.md)。
 
 在现有profile合并下列片段，保留其他依赖和bundle：
 
@@ -106,7 +106,7 @@ MCP入口没有--timeout或--ensp-executable参数，不能把DSH字段直接作
 
 本地目录或压缩包安装应先在独立临时目录完整解包，确认 `index.js`、所有导出、CLI 入口和 `cordis.patch.yml` 均存在且非空，再提升为正式目录并切换依赖。npm 包含一层 `package/` 根目录；不要把它多嵌套一层，也不要清空运行进程仍引用的旧目录。完整源码的 `npm run test:package` 会逐文件比较实际解包大小与源码 SHA256，并校验所有声明入口；目标副本另执行 `npm run check:dsh -- --plugin-root <实际目录>`。
 
-**DSH rc.3 中，同名插件从本地 link 切到 GitHub、或实际安装目录变化后，需要正常退出并完整重启宿主。** Node 模块解析会保留已解析的真实目录；插件开关、保存依赖或更新详情页都不能证明路由已切换。先保存会话，保留旧目录至重启完成，随后只读调用 `ensp_status`，比较 `build.root` 与目标安装目录、`build.fingerprint` 与该副本，并记录 `loadedAt`。若尚未一致，应保留旧副本和备份，继续排查，不能仅以版本相同判定升级成功。
+**DSH rc.3 中，同名插件从本地 link 切到 GitHub、或实际安装目录变化后，需要正常退出并完整重启宿主。** Node 模块解析会保留已解析的真实目录；插件开关、保存依赖或更新详情页都不能证明路由已切换。先保存会话，保留旧目录至重启完成，随后只读调用 `ensp_status`，比较 `build.root` 与目标安装目录、`build.fingerprint` 与该副本，并记录 `loadedAt` 及本次 `observedAt`。M2.1 安装核验默认要求五分钟内观测；缺失或陈旧时间不能证明运行通过。若尚未一致，应保留旧副本和备份，继续排查，不能仅以版本相同判定升级成功。完整候选与回退流程见 [M2.1 说明](M2.1-IMPLEMENTATION.zh-CN.md)。
 
 2026-11-14 本机一次旧路径 `index.js` 缺失已恢复，并以运行中工具回读确认切到 GitHub 安装副本，见 [1.1.3 后续部署核验](releases/1.1.3.zh-CN.md#后续部署核验)。这不改变设备业务验收结论。
 

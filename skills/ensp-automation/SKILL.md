@@ -5,6 +5,8 @@ description: 用 dsh-ensp 插件操作华为 eNSP：后台批量 GUI 驱动、te
 
 # eNSP 实验自动化手册（实测版）
 
+调用结果必须严格检查 `ok === true`，并保留失败项、跳过项及 `execution`。可从 `dsh-ensp-fusion/result` 导入 `assertOperationSucceeded` 检查工具业务结果；DSH 宿主的错误信封应先按宿主契约处理。禁止吞异常后返回空字符串、将“未抛错”计为成功。GUI 投递成功、设备配置成功、保存/重开成功和业务通过分别验收。`ensp_lldp` 的 DIFFERENT/INCONCLUSIVE 会聚合为失败/证据不足；完整用法见 docs/M1-IMPLEMENTATION.zh-CN.md。
+
 本手册提供通用操作建议；设备与环境兼容性需要部署者验证。
 
 ## 0. 开工顺序（别跳）
@@ -20,10 +22,8 @@ description: 用 dsh-ensp 插件操作华为 eNSP：后台批量 GUI 驱动、te
 5. 需要改名时问用户：按重要程度编号（SW1/SW2、AR1/AR2、FW1）；用户给了规则以用户为准。
 6. **收尾必须保存配置**（见 3.5）：用户没说"不用保存"，就要每台配过的设备都落盘。
 
-> **无人值守 / 子代理降级策略**：上面 3–5 条要"先问用户"，但被别的 agent 委派时 `ask_user_question`
-> 会直接失败（`human interaction is unavailable`）。这种情况下按默认值继续，不要卡住：
-> 默认 `undo debugging all` + `undo terminal monitor`；默认不改设备名（除非题目提示符要求）；
-> 关掉别人开着的拓扑前先 Ctrl+S 保存。
+> **无人值守时遵循已有授权**：没有答复不代表同意改名、关闭调试、保存或关闭当前工程。
+> 继续已授权的只读检查和离线准备；依赖缺失授权的动作保持未执行。子代理不能扩大原任务范围。
 
 ## 0.4 参考文档可能本身就是错的
 
@@ -54,7 +54,7 @@ description: 用 dsh-ensp 插件操作华为 eNSP：后台批量 GUI 驱动、te
 2. **多设备一次下发**：
    ```json
    ensp_cli {"topology_path":"…topo",
-             "devices":[{"device":"FW","commands":[…],"username":"admin","password":"Admin@123"},
+             "devices":[{"device":"FW","commands":[…],"credential_file":"credentials.local.json","credential_ref":"FW"},
                         {"device":"AR","commands":[…]},
                         {"device":"SW","commands":[…]}]}
    ```
@@ -89,7 +89,7 @@ description: 用 dsh-ensp 插件操作华为 eNSP：后台批量 GUI 驱动、te
 
 ### 常用 steps
 ```json
-{"op":"start_all"}                                  // 激活窗口 + 点空白 + Ctrl+A + 点启动 + 等端口全部起来
+{"op":"start_all"}                                  // 默认受保护 Ctrl+Alt+A，核对端口及 VRP 就绪
 {"op":"stop_all"}                                   // 点停止 + 等端口全部关闭
 {"op":"open_console","device":"SW1"}                // 需要 topology_path；内部走双击图标
 {"op":"close_console","device":"SW1"}               // 截完图把设备窗口收掉，保持桌面干净
@@ -105,36 +105,17 @@ description: 用 dsh-ensp 插件操作华为 eNSP：后台批量 GUI 驱动、te
 
 ### 启动设备（防火墙很慢，别用 sleep 盲等）
 
-- `start_all` 自己轮询端口；第一次点启动后**一个端口都没起来**，它会自动重新全选再点一次。
+- `start_all` 默认使用受保护的 Ctrl+Alt+A；`method:"toolbar"` 才全选后点击工具栏。启动/停止控制每次只投递一次，端口超时不自动重放。检查 attempts、retrySuppressed 和 readiness，再基于当前状态制定新计划。
 - 防火墙（USG6000V）是整台虚拟机，启动常要几分钟。**不要写 `Start-Sleep 90` 这种**：
   要么先配不依赖它的设备，要么一次等到位：
   `{"op":"wait_ports","ports":[2000],"timeout_ms":300000}`（返回等了多久、哪些端口开了）。
-- **端口被残留进程占用**：eNSP 退出后有时会留下仍监听 2000~2002 的僵尸进程。此时设备"启动失败"、
-  telnet 连得上却没有回显、`start_all` 还会误以为设备已经在跑。先清掉再启动：
-  `{"op":"free_ports","ports":[2000,2001,2002]}`（返回杀了哪些 pid、还剩哪些端口）。
+- **端口占用先确认身份**：端口开放只证明 TCP 可连接，不代表设备或 VRP 就绪。先关联工程 UUID、端口、PID/创建时间和串口日志；不得把占用者直接当作僵尸进程。free_ports 会终止进程，不作为就绪失败的默认恢复动作。
 
 ### 切换拓扑（从 A 拓扑换到 B 拓扑）
 
-**首选一条调用**（`open` 会把 .topo 直接打开，不是只启动 eNSP）：
+切换前核对当前工程和进程身份，按用户明确意图保存/关闭；已有未确认动作先只读取证。使用 close_project 检查当前保存框及明确 save 策略，不能默认 kill 全部 eNSP 进程。
 
-```json
-ensp_gui steps=[
-  {"op":"kill","names":["eNSP_Client.exe"]},
-  {"op":"sleep","t":3},
-  {"op":"open","path":"E:/…/【实训任务3.3】….topo"},
-  {"op":"sleep","t":14}
-]
-```
-
-然后 `start_all`（带 `topology_path`）即可。
-
-- 不想杀进程时：先 Ctrl+S 保存当前拓扑 → `{"op":"close","hwnd":<主窗口>}` → 弹出的是**自绘保存框**，
-  `texts` 只读到 `Button1/2/3` 没有文字、`bmclick` 点了没反应，必须 `ensp_shot` 截图看位置再真实点击 →
-  最后仍然用 `{"op":"open","path":…}` 打开新拓扑。
-- ⚠ **不要把 .topo 路径当命令行参数传给 `eNSP_Client.exe`**（`spawn` / `explore` 带参）：只会开出一个
-  空白的「新建拓扑」画布，看起来像打开了、其实 0 台设备。
-- 判断到底开没开：`ensp_status` 的实例标题不是「新建拓扑」，且 `ensp_topo action=list` 能列出设备；
-  画布空白就是没开。
+open/explore/spawn 只确认投递。新工程是否加载，需要当前窗口、工程身份和设备证据独立核验；ensp_topo action=list 读取磁盘文件，不能证明 GUI 已加载该文件。核验后才可对指定拓扑运行 start_all。
 
 ### 点击策略
 - 状态栏、工具栏、菜单在**非客户区**，消息投递无效，只能真实点击（`click` 带 `restore:true`）。
@@ -173,19 +154,17 @@ ensp_gui steps=[
 - **不要读 eNSP 状态栏**：给自绘 `msctls_statusbar32` 发 `SB_GETPARTS` 会让整个客户端崩溃。要看"选中数量"就截图。
 - 窗口句柄每次拓扑重载都会变，一律按标题/类名重新查找。
 - 每个拓扑一个 `eNSP_Client.exe` 进程；关掉一个实例不影响另一个。
-- 打开拓扑后 eNSP 可能崩溃（重拓扑尤其明显）。**出现 `no such hwnd` 就是客户端没了**：`taskkill /f /im eNSP_Client.exe` → 重新拉起 → 重开拓扑，别在旧句柄上反复重试。
+- no such hwnd 可能是窗口重建、目标退出或崩溃；先重新采集状态、进程身份和 incident 证据，不复用旧句柄，不据此自动强杀/重启全部实例。
 - 从提权桥里用 Explorer 拉起 eNSP（`{"op":"explore","path":"...eNSP_Client.exe"}`），进程才会在调用结束后继续活着。
 
 ## 3. telnet 通道
 
 - 端口 = `.topo` 里设备的 `com_port`（FW=2000、R1=2001、SW1=2002 …）；设备没启动时端口不开放。
-- 连上后先发一次回车拿提示符：`<SW1>` / `[SW1]`。没有用户名密码（除非题目配了 AAA）。
+- 连接后先在预算内短暂读取主动问候；已有待交互提示时不发送空回车。静默控制台才发送一次唤醒回车，后续按当前认证/交互状态推进；100ms 观察窗不能排除更晚到达的提示。
 - 分屏：VRP 控制台不支持 `screen-length 0 temporary`（会报 `The type of the included user interface must be VTY.`）；`ensp_cli` 已自动应答 `---- More ----`。
 - 配置命令用 `system_view:true` 进入 `system-view`；`quit`/`return` 自己按需写进命令列表。
 - 防火墙 USG6000V：控制台可能只回 `##` 之类的垃圾或根本没起来。**不要卡在这里**，告知用户后跳过，其余设备照常做。
-- 防火墙默认凭据：账号 `admin`、口令 `Admin@123`（首次可能强制改密 → 传 `new_password`）。
-  **口令只用题目/用户给的值**：不确定就在一次调用里传候选列表 `passwords: ["Admin@123", "Huawei@123"]`，
-  工具会按顺序自动重试并告诉你哪个通了；**别猜变体**（试过 `Admin@1234` 这种，纯浪费回合）。
+- 凭据只使用用户/题目明确提供的值，优先 credential_file/credential_ref。不要推测出厂密码或生成候选；兼容 passwords 只供本次明确授权的候选使用。认证失败停止本次就绪探测；强制改密需要明确的新口令和改密意图。
 - **长回显可能被上层压缩**：结果超过几百字节时，`results[].output` 可能被替换成 `<<ccr:…,1.2KB>>` 这类标记，
   `| include` 过滤也救不回来。对策（按顺序试）：
   1. 传 `output_file: "工作区/回显/xx.txt"` 把完整回显落盘，再用 `ops_grep` 精确检索；
@@ -291,7 +270,7 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
 1. `ensp_status` + `ensp_topo list` 摸清现状（设备、型号、端口、标注里的地址规划）。
 2. 规划：谁做网关、谁做 DNS/Web、地址段从标注里读，不要自己编。
 3. 改名/IP 能离线做就先用 `ensp_topo` 改，再开拓扑。
-4. 启动设备 → `ensp_status include_telnet:true` 确认端口开放。
+4. 启动设备 → 检查 start_all readiness 中提示符与 display version；端口开放不等于就绪。
 5. **先看再配**：拓扑可能已经预配了一部分（接口地址、静态路由），盲配会得到
    `Error: The address already exists.` / `Error: The route already exists.`。
    先跑一条 `display ip interface brief` + `display ip routing-table` 摸清基线，已有的跳过。
@@ -299,7 +278,7 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
    题目提示符写 `[FW]` 时，用 `sysname FW` 对齐，截图和文档才对得上。
 6. 配置依次下发（`ensp_cli` + `system_view`），每台设备配完立刻复制回显留档；**配完就 `save`**（`ensp_cli` 会自动做，检查 `saved.ok`）。
 6. **验证**（见下），不通过就查错误目录，不要急着截图。
-7. 截图：需要"像学生手动做"的界面时，用 `ensp_cli echo_to_window:true` 把同样命令用**真实键盘**打进设备窗口再截（命令会真的再执行一次，`display` 类命令无所谓，配置类命令要挑不会报错的写法）。回显前工具会先确认窗口可见并抢到前台，抢不到就拒绝打字而不是乱打。截完用 `close_console` 收掉窗口。
+7. 截图：需要界面证据时，用 `ensp_cli echo_to_window:true` 把同样命令用**真实键盘**打进设备窗口再截（命令会再执行一次，仅允许 display/ping/tracert；配置不为截图重复执行）。回显前检查窗口可见及前台归属，检查失败则拒绝输入。截完用 `close_console` 收掉本次打开的窗口。
 8. `ensp_doc` 出两份文档；普通报告和回复只说明凭据引用，不列明文口令。敏感凭据仅在用户明确要求时单独交付。
 
 ## 6. 四层验证（缺一层就不算通过）
@@ -319,9 +298,9 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
 | `refusing to click ... belongs to '<别的程序>'` | 目标坐标被别的窗口盖住 | 先 `{"op":"activate","ensp":true}`，或直接用带 `expect` 的点击让桥自己抬升 |
 | `refusing to send keystrokes ...` / `refusing to type` | 目标窗口没拿到前台，怕把按键打到用户窗口里 | 先 `activate`，再 `safetype`；确认 eNSP 真的在最前面 |
 | `no such hwnd ...` | 客户端崩溃或窗口重建 | 重新 `ensp_status`，必要时重启 eNSP 并重开拓扑 |
-| 点启动没反应 | 没有选中设备 / 窗口没激活 | `start_all` 已含激活+点空白+Ctrl+A；若仍无反应，检查是否被别的窗口盖住 |
+| 点启动没反应 | 没有选中设备 / 窗口没激活 | 默认 start_all 使用受保护 Ctrl+Alt+A；工具栏方式需显式 method。超时后检查实际状态，不重复启动 |
 | telnet 端口 timeout | 设备没启动 / 还没起完 | `start_all` 会自己等端口；手动等 5–15 s；FW 可能要几分钟或直接失败 |
-| 首条命令超时、partial output 只有 `##` | 端口已开放但设备还没就绪（AR2220 冷启动实测第一次 20 s 超时） | 加 `command_timeout_ms: 45000` 重试一次；实测重试 269 ms 就正常，不是链路问题 |
+| 首条命令超时、partial output 只有 `##` | 端口已开放但未证明 VRP 就绪；不能仅凭该输出确定根因 | 先核查控制台/任务终态及原生日志；unconfirmed 时不重放。确认原操作停止后使用单次就绪诊断，再决定新计划 |
 | `Error: The type of the included user interface must be VTY.` | 在控制台用了 VTY 专属命令 | 改用自动应答分屏 |
 | 截图为全黑/旧画面 | 窗口没绘制、已隐藏，或被遮挡 | 设备窗口必须用 `open_console` 打开后再截；主窗口用 `ensp_shot` 的窗口 DC 截图，不需要置顶 |
 | 回显截图里只有命令行、没有输出 | 旧版把行尾写成 `\r`，桥的 `type_text` 会跳过 `\r`，命令没提交 | 0.2.1 已改成 `\n`（映射 VK_RETURN）；若仍缺输出，加大 `echo_settle_ms` |
@@ -333,11 +312,11 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
 | `bridge.elevated:false` 但 eNSP 在跑 | 桥没提权，对提权窗口的消息会被 UIPI 拒绝 | 以管理员身份运行 DSH；telnet/.topo 通道仍然可用 |
 | `saved.ok:false` | 未确认设备保存 | 核对 `display saved-configuration` 的具体基线及工程配置内容，不能仅检查时间戳 |
 | AR2220 保存交互 | 按设备实际提示确认并核对成功回显 | 使用 save:true，不拼接多行命令；两台 AR2220 实测通过。 |
-| `console authentication failed for user "admin"` | 口令不对，或改密流程没走完（答 `N` 会被踢回 `Login authentication`） | 先试出厂 `Admin@123`；设备要求改密时传 `new_password`（工具会走 Y→旧→新→确认） |
-| USG6000V 登录卡在 `The password needs to be changed. Change now? [Y/N]:` | 出厂口令首次登录强制改密 | `ensp_cli` 传 `username`/`password`/`new_password`，例如 `admin` + `Admin@123` → `Huawei@123` |
+| `console authentication failed for user "admin"` | 口令不对，或改密流程没走完（答 `N` 会被踢回 `Login authentication`） | 停止重试，核对本次明确提供的凭据；仅在已获改密授权且有明确新口令时传 new_password |
+| USG6000V 登录卡在 `The password needs to be changed. Change now? [Y/N]:` | 出厂口令首次登录强制改密 | 通过本地凭据引用提供已知凭据和明确新口令；没有改密意图则停止，不发送空回车或默认 Y |
 | 重开 `.topo` 后配置缺失 | 保存、工程同步或启动加载任一层可能失败，根因需取证 | 保护历史非空备份，关联同步日志，核对配置内容及重开后的当前配置；不能直接归因于漏 Ctrl+S |
 | 设备窗口截图是旧画面（不刷新） | 窗口被遮挡/不在前台时，窗口 DC 不重绘，BitBlt 拿到上一屏 | 工具已在截图前 `RedrawWindow`+`UpdateWindow`；仍不行就先 `activate` 该窗口再截 |
-| telnet 能用但窗口打字乱码/丢字符 | 控制台空闲超时（`Configuration console time out, please press any key to log on`），第一个按键被吃掉；或打字太快 | 工具已自动先发一个回车唤醒；`echo_to_window` 的 `per_char` 已提到 0.05 |
+| telnet 能用但窗口打字乱码/丢字符 | 控制台空闲超时（`Configuration console time out, please press any key to log on`），第一个按键被吃掉；或打字太快 | TCP 会话先读取主动问候，静默时才发唤醒回车；窗口回显另受前台守卫与输入延迟控制 |
 | 重置拓扑文件夹后设备配置还在 | eNSP 的设备状态保存在设备镜像里，重新解压 .zip 不等于复位 | 真复位要在设备上 `reset saved-configuration` 再 `reboot`；否则先 `display current-configuration` 核对残留 |
 | 会话表查不到刚做的 HTTP 访问 | HTTP 会话读完响应很快就拆，查询有个时间窗 | 触发访问后 0.3 s 内查；或连查 2–3 次 / 用 `display firewall session table verbose` |
 | 停设备后配置全丢 | 重启会从 `vrpcfg.cfg` 重新加载，RAM 里没 `save` 的改动全丢 | 停设备**之前**先 `save`；`ensp_cli` 改配置时会自动保存 |
@@ -358,7 +337,7 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
   题目拓扑图 → 图注 → 实际拓扑图 → 操作步骤，与用户认可的样例一致。
 - **凭据**：普通报告、日志和回复不列明文口令；敏感信息按用户指定方式单独处理。
 - **回显留档**：关键验证输出（ping/路由表/接口状态）连同命令一起保存。
-- **配置已落盘**：每台配过的设备 `save` 成功（`saved.ok:true`），交付时说明已保存；若用户要求不保存，明确写出来。
+- **分层保存证据**：saved.ok:true 仅为设备保存流程证据；工程同步、ensp_project 磁盘配置检查、同路径重开和业务断言分别记录。只有对应层核验通过才宣称落盘/重开通过；未请求与未知单列。
 - 交付前自查：设备名是否按规则、接口是否全 Up、截图是否与题目一一对应、有没有残留调试日志、设备窗口/多余窗口是否已关掉。
 
 
@@ -374,5 +353,13 @@ ensp_capture { "topology_path": "lab/3-4.topo", "shots": [
 - GUI 默认失败即停，检查整体 ok、steps[].ok、skipped 和 uncertain；发生传输不确定时先观察实际状态，不自动重放。
 - 关闭测试项目使用 close_project；默认 ask 返回确认框信息。已查看的旧确认框需传 dialog_hwnd 和明确 save 策略。已识别 eNSP 保存框使用 WM_COMMAND，随后确认窗口消失；未知框不自动接受。
 - 多个 eNSP 主窗口不自动猜测；控制台查找核对所属进程。
-- start_all 默认就绪预算 120000ms，端口开放后还必须取得提示符和 VRP 回显。portStateVerified:false 表示端口未检查，open:null 不能理解为全部关闭。
+- start_all 就绪阶段默认请求普通拓扑 120000ms、含 USG 拓扑 240000ms；仍受工具总预算与前序耗时约束。端口开放后还必须取得提示符和 VRP 回显。portStateVerified:false 表示端口未检查，open:null 不能理解为全部关闭。
 - 实机复测入口与未验证范围见 docs/HARDENING.md；不要将旧版实机记录当作新流程已经通过。
+
+## M2.1 契约与重复操作边界
+
+- GUI 整批静态预校验；shot/screen 使用 out，path 为兼容别名，冲突拒绝。参数/路径错误包含 stepIndex 与 field，预校验失败不发送前序输入；执行前仍检查窗口归属、前台与几何。
+- 待认证、待交互、非 VRP 回显在一次就绪调用中停止，不持续重连。连接拒绝等暂态错误在单调总截止时间内有界退避；新调用重新核对当前状态，不永久屏蔽端口。
+- ensp_status 的 observedAt 是本次观测时间，build.loadedAt 是模块加载时间。安装核验默认只接受五分钟内且 root/fingerprint 一致的观测；隔离宿主验证不能代替桌面会话回读。
+
+拓扑绘图、排版或标注覆盖时使用 ensp-topology-drawing。ensp_topo 的 layout-inspect 检查原图，layout-preview 预览避让，layout-apply 写入新 .topo 副本。

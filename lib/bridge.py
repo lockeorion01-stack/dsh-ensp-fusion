@@ -44,6 +44,7 @@ import subprocess
 import threading
 import time
 import traceback
+from bridge_control import Task, TaskCancelled, TASKS, LOCAL, check_task, task_sleep
 
 import win32api
 import win32clipboard
@@ -185,20 +186,29 @@ _release_mutex = _win32_api(kernel32, "ReleaseMutex", [wt.HANDLE], wt.BOOL)
 @contextmanager
 def gui_transaction():
     """Serialize elevated job and resident processes in this Windows session."""
-    with GUI_LOCK:
+    while not GUI_LOCK.acquire(timeout=0.05):
+        check_task()
+    try:
+        check_task()
         mutex = _create_mutex(None, False, r"Local\dsh-ensp-gui-input-v1")
         if not mutex:
             raise RuntimeError("cannot create GUI transaction mutex")
         acquired = False
         try:
-            acquired = _wait_mutex(mutex, 15000) in (0, 0x80)
+            end = time.monotonic() + 15
+            while not acquired and time.monotonic() < end:
+                check_task()
+                acquired = _wait_mutex(mutex, 50) in (0, 0x80)
             if not acquired:
                 raise RuntimeError("another GUI operation is active; retry when it finishes")
+            check_task()
             yield
         finally:
             if acquired:
                 _release_mutex(mutex)
             _close_handle(mutex)
+    finally:
+        GUI_LOCK.release()
 
 
 @contextmanager
@@ -1558,6 +1568,7 @@ def select_tab(hwnd, index):
 
 
 def dispatch(op, args):
+    check_task()
     if op == "select_tab":
         return select_tab(resolve_target(args), args["index"])
     if op == "select_list":
@@ -1568,7 +1579,7 @@ def dispatch(op, args):
             desktop = True
         except RuntimeError:
             cursor, desktop = None, False
-        return {"pong": True, "pid": os.getpid(), "elevated": is_elevated(),
+        return {"pong": True, "pid": os.getpid(), "elevated": is_elevated(), "cancellation_protocol": 1,
                 "dpi_aware": DPI_MODE, "cursor": cursor, "desktop_available": desktop,
                 "screen": [user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)]}
     if op == "windows":
@@ -1794,7 +1805,7 @@ def dispatch(op, args):
     if op == "free_ports":
         return free_ports(args["ports"], args.get("wait", 1.0))
     if op == "sleep":
-        time.sleep(float(args.get("t", 0.5)))
+        task_sleep(float(args.get("t", 0.5)))
         return {"slept": args.get("t", 0.5)}
     if op == "exit":
         return {"bye": True}
@@ -1811,6 +1822,18 @@ def run_job(job_path):
     started = time.time()
     current = {"index": None, "op": None}
     completed = threading.Event()
+    task_id = job.get("task_id") or ("legacy-" + str(os.getpid()) + "-" + str(started))
+    def cancelled():
+        path = job.get("cancel_path")
+        if not path:
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle).get("task_id") == task_id
+        except (OSError, ValueError):
+            return False
+    task = Task(task_id, job.get("timeout_ms", 180000), cancelled)
+    LOCAL.task = task
 
     def write_atomic(path, payload):
         temp = path + ".tmp"
@@ -1822,7 +1845,8 @@ def run_job(job_path):
         if completed.is_set():
             return
         try:
-            payload = {"ok": False, "pid": os.getpid(), "error_code": "GUI_JOB_TIMEOUT",
+            payload = {**task.result(), "state": "unconfirmed", "stop_confirmed": False,
+                       "ok": False, "pid": os.getpid(), "error_code": "GUI_JOB_TIMEOUT",
                        "uncertain": True, "steps": list(results) + [{**current, "ok": False,
                        "error": "GUI job deadline exceeded; inspect state before retrying"}],
                        "ms": int((time.time() - started) * 1000)}
@@ -1839,6 +1863,10 @@ def run_job(job_path):
     watchdog.daemon = True
     watchdog.start()
     for index, step in enumerate(job.get("steps", [])):
+        try:
+            task.check()
+        except TaskCancelled:
+            break
         if not isinstance(step, dict) or "op" not in step:
             results.append({"index": index, "ok": False, "op": None,
                             "error": "step must be an object with op"})
@@ -1846,12 +1874,17 @@ def run_job(job_path):
         op = step["op"]
         current.update(index=index, op=op)
         if job.get("status"):
-            write_atomic(job["status"], {"pid": os.getpid(), "started": started,
-                         "deadline": started + timeout, **current, "state": "running"})
+            write_atomic(job["status"], {"pid": os.getpid(), "operation_id": job.get("operation_id"), "started": started,
+                         "deadline": started + timeout, **current, **task.result()})
         args = {k: v for k, v in step.items() if k != "op"}
         t0 = time.time()
         try:
             with gui_transaction():
+                task.check()
+                task.state, task.dispatched = "running", True
+                if job.get("status"):
+                    write_atomic(job["status"], {"pid": os.getpid(), "operation_id": job.get("operation_id"),
+                                 "started": started, "deadline": started + timeout, **current, **task.result()})
                 payload = dispatch(op, args) or {}
             payload.setdefault("ok", True)
         except Exception as exc:
@@ -1861,15 +1894,24 @@ def run_job(job_path):
         payload["op"] = op
         payload["ms"] = int((time.time() - t0) * 1000)
         results.append(payload)
-        if job.get("stop_on_error") and not payload["ok"]:
+        if task.event.is_set() or (job.get("stop_on_error") and not payload["ok"]):
             break
+    try:
+        task.check()
+    except TaskCancelled:
+        task.event.set()
+    task.state = "cancelled" if task.event.is_set() else "finished"
     out = {"ok": all(item["ok"] for item in results), "elevated": is_elevated(), "dpi_aware": DPI_MODE,
            "pid": os.getpid(), "steps": results, "ms": int((time.time() - started) * 1000)}
+    out.update(task.result())
+    if task.event.is_set():
+        out.update(ok=False, cancelled=True)
     completed.set()
     watchdog.cancel()
     write_atomic(job["result"], out)
     if job.get("status"):
-        write_atomic(job["status"], {"pid": os.getpid(), "state": "finished", "ok": out["ok"]})
+        write_atomic(job["status"], {"pid": os.getpid(), "operation_id": job.get("operation_id"), **task.result(), "ok": out["ok"]})
+    LOCAL.task = None
 
 
 def serve(port, token):
@@ -1907,14 +1949,36 @@ def _serve_conn(conn, token):
                                               "error": "bad token"}) + "\n").encode())
                     continue
                 op = req.get("op")
+                if op in ("cancel_task", "task_status"):
+                    try:
+                        payload = {"ok": True, **TASKS.control(req.get("task_id"), op == "cancel_task")}
+                    except Exception as exc:
+                        payload = {"ok": False, "error": str(exc), "stop_confirmed": False}
+                    conn.sendall((json.dumps(payload) + "\n").encode())
+                    continue
                 t0 = time.time()
+                task = None
                 try:
+                    if req.get("task_id"):
+                        task = TASKS.begin(req["task_id"], req.get("timeout_ms", 180000))
+                    LOCAL.task = task
                     with gui_transaction():
+                        check_task()
+                        if task:
+                            task.state, task.dispatched = "running", True
                         payload = dispatch(op, {k: v for k, v in req.items() if k != "op"}) or {}
                     payload.setdefault("ok", True)
                 except Exception as exc:
                     payload = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc),
                                "trace": traceback.format_exc()[-1200:]}
+                finally:
+                    if task:
+                        task.state = "cancelled" if task.event.is_set() else "finished"
+                        task.finished_at = time.monotonic()
+                        payload.update(task.result())
+                        if task.event.is_set():
+                            payload.update(ok=False, cancelled=True)
+                    LOCAL.task = None
                 payload["id"] = req.get("id")
                 payload["ms"] = int((time.time() - t0) * 1000)
                 conn.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode())

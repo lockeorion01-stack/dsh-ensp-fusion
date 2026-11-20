@@ -14,10 +14,10 @@ export const DEFAULT_PROTOCOL_VERSION = '2025-06-18'
 
 /**
  * Start the stdio loop. `onMessage(message, send)` is awaited for every inbound
- * message, one at a time, so responses keep request order and tool calls cannot
- * interleave inside the bridge.
+ * action, one at a time. Cancellation notifications bypass that queue without
+ * permitting concurrent action dispatch.
  */
-export function startStdio({ onMessage, onClose, onError }) {
+export function startStdio({ onMessage, onClose, onError, onQueued, onClosing }) {
   const send = (payload) => {
     process.stdout.write(`${JSON.stringify(payload)}\n`)
   }
@@ -28,16 +28,19 @@ export function startStdio({ onMessage, onClose, onError }) {
   rl.on('line', (line) => {
     const text = line.trim()
     if (!text) return
+    let message
+    try { message = JSON.parse(text) }
+    catch (error) { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } }); return }
+    // The action queue stays serial; cancellation is an independent control
+    // notification and must not wait behind the action it is stopping.
+    if (message?.method === 'notifications/cancelled' && message.id == null) {
+      void Promise.resolve(onMessage(message, send)).catch(error => onError?.(error))
+      return
+    }
+    const ticket = onQueued?.(message)
     queue = queue.then(async () => {
-      let message
       try {
-        message = JSON.parse(text)
-      } catch (error) {
-        send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } })
-        return
-      }
-      try {
-        await onMessage(message, send)
+        await onMessage(message, send, ticket)
       } catch (error) {
         onError?.(error)
         const id = message?.id ?? null
@@ -49,6 +52,7 @@ export function startStdio({ onMessage, onClose, onError }) {
   })
 
   rl.on('close', () => {
+    onClosing?.()
     queue = queue.then(() => onClose?.())
   })
 

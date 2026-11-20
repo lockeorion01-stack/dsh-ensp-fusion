@@ -5,6 +5,26 @@ import test from 'node:test'
 
 import { VrpSession } from '../lib/cli.js'
 
+test('unsolicited console questions are inspected before sending a wake-up CR', async t => {
+  for (const banner of ['Delete existing configuration? [Y/N]:', 'Input modulus [default = 512]:']) {
+    const sockets = new Set(), sent = []
+    const server = createServer(socket => {
+      sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket))
+      socket.on('data', chunk => sent.push(chunk))
+      socket.write(banner)
+    })
+    server.listen(0, '127.0.0.1'); await once(server, 'listening')
+    const session = new VrpSession({ port: server.address().port, commandTimeoutMs: 300 })
+    try {
+      await assert.rejects(session.open(), error => error.kind === 'input_required')
+      assert.equal(Buffer.concat(sent).length, 0, 'even a blank line could answer the pending question')
+    } finally {
+      session.close(); for (const socket of sockets) socket.destroy()
+      await new Promise(resolve => server.close(resolve))
+    }
+  }
+})
+
 test('explicit multi-round RSA replies match literal prompt tails without speculative answers', async t => {
   const { session } = await fixture(t, [
     ['', '<SW1>'], ['rsa local-key-pair create', 'Input modulus [default = 512]:'],

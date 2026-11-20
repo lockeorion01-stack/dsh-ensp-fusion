@@ -33,11 +33,11 @@ test('unified registry has nineteen unique tools and closed schemas', () => {
   assert.deepEqual(build.inputSchema.required, ['output_path'])
   assert.deepEqual(build.inputSchema.properties.devices.items.required, ['name','model'])
 })
-test('DSH registers both workflow skills and the same nineteen tools', () => {
+test('DSH registers three workflow skills and the same nineteen tools', () => {
   const skills=[],tools=[]
   apply({tools:{register:t=>tools.push(t)},skills:{register:s=>skills.push(s)},systemPrompt:{section:()=>{}}},Config({}))
   assert.equal(tools.length,19)
-  assert.deepEqual(skills.map(s=>s.name),['ensp-automation','ensp-fusion'])
+  assert.deepEqual(skills.map(s=>s.name),['ensp-automation','ensp-fusion','ensp-topology-drawing'])
   assert.ok(skills[1].content.includes('ensp_wait'))
 })
 test('topology generation roundtrips through both upstream readers', () => {

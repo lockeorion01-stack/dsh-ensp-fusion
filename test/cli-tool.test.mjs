@@ -70,6 +70,22 @@ test('configuration responses, transcripts and previews redact secrets after ass
   assert.equal(device.commands.length, 1)
 })
 
+test('batch preview and loopback execution inherit view/save and respect explicit device overrides', async t => {
+  const a = await fixture(t), b = await fixture(t)
+  const server = createMcpServer({ workspace: await workspace(t), quiet: true })
+  const batch = { system_view: true, save: false, devices: [
+    { port: a.port, commands: ['sysname R1'] },
+    { port: b.port, commands: ['display version'], system_view: false },
+  ] }
+  const preview = (await invoke(server, 'ensp_cli', { ...batch, dry_run: true })).value.preview
+  assert.deepEqual(preview.map(e => [e.system_view, e.save]), [[true, false], [false, false]])
+  assert.equal((await invoke(server, 'ensp_cli', batch)).value.ok, true)
+  assert.deepEqual(a.commands, ['system-view', 'sysname R1'])
+  assert.deepEqual(b.commands, ['display version'])
+  assert.equal(prepareCliEntries({ save: false, devices: [{ ...batch.devices[0], save: true }] })[0].save, true)
+  assert.throws(() => prepareCliEntries({ ...batch, save: 'false' }), /boolean/)
+})
+
 test('reject invalid batch before connecting any device', async (t) => {
   const device = await fixture(t)
   const server = createMcpServer({ workspace: await workspace(t), quiet: true })

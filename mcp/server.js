@@ -13,6 +13,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Config, apply } from '../index.js'
+import { operationSucceeded } from '../lib/operation-result.js'
 import { INSTRUCTIONS } from './instructions.js'
 import { DEFAULT_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, errorMessage, result, startStdio } from './protocol.js'
 
@@ -71,7 +72,7 @@ function toInputSchema(parameters = {}) {
  * Build the tool registry through the same code path the DSH plugin uses.
  * `cwd` is the only piece of the DSH exec context the tools read.
  */
-export function createRegistry({ workspace, restrictToWorkspace = true, overrides = {} } = {}) {
+export function createRegistry({ workspace, restrictToWorkspace = true, overrides = {}, entrypoint = 'direct' } = {}) {
   const config = Config({
     registerSkill: false,
     injectPrompt: false,
@@ -88,7 +89,7 @@ export function createRegistry({ workspace, restrictToWorkspace = true, override
   apply(ctx, config)
 
   const cwd = resolve(workspace ?? process.env.ENSP_MCP_WORKSPACE ?? process.cwd())
-  const exec = { agent: { session: { header: { cwd } } } }
+  const exec = { agent: { session: { header: { cwd } } }, entrypoint }
 
   const tools = registered.map((tool) => ({
     name: tool.name,
@@ -133,8 +134,17 @@ export function createMcpServer(options = {}) {
     message: 'No topology loaded yet. Call ensp_topo with action="list" and topology_path to load a snapshot.',
   }, null, 2)
   let initialized = false
+  const requests = new Map()
+  function reserve(message) {
+    if (message?.method !== 'tools/call' || message.id == null) return undefined
+    if (requests.has(message.id)) return { error: 'duplicate active request id' }
+    if (requests.size >= 1024) return { error: 'request capacity reached' }
+    const controller = new AbortController()
+    requests.set(message.id, controller)
+    return { controller, deadline: performance.now() + registry.config.timeoutMs }
+  }
 
-  async function handleMessage(message, send) {
+  async function handleMessage(message, send, ticket) {
     const { id, method, params } = message ?? {}
     // Notifications (no id) never get a response.
     const isNotification = id === undefined || id === null
@@ -157,7 +167,9 @@ export function createMcpServer(options = {}) {
         return
       }
       case 'notifications/initialized':
+        return
       case 'notifications/cancelled':
+        if (isNotification) requests.get(params?.requestId)?.abort(new Error('MCP caller cancelled request'))
         return
       case 'ping':
         reply(result(id, {}))
@@ -173,17 +185,21 @@ export function createMcpServer(options = {}) {
         return
       }
       case 'tools/call': {
+        ticket ??= reserve(message)
+        if (!ticket?.controller) { reply(errorMessage(id, -32602, ticket?.error ?? 'tool calls require a request id')); return }
+        const controller = ticket.controller
         const name = params?.name
         const args = params?.arguments ?? {}
         const tool = byName.get(name)
         if (!tool) {
+          requests.delete(id)
           reply(errorMessage(id, -32602, `unknown tool: ${name}`, { available: [...byName.keys()] }))
           return
         }
         const started = Date.now()
         try {
-          const value = await tool.handler(args, registry.exec)
-          const isError = value?.ok === false
+          const value = await tool.handler(args, { ...registry.exec, entrypoint: 'mcp', callId: id, signal: controller.signal, deadline: ticket.deadline })
+          const isError = !operationSucceeded(name, value)
           const content = toContent(tool, args, value)
           if (name === 'ensp_topo' && args.action === 'list' && !isError) {
             topologySnapshot = JSON.stringify(value, null, 2)
@@ -193,8 +209,8 @@ export function createMcpServer(options = {}) {
         } catch (error) {
           const text = error instanceof Error ? error.message : String(error)
           log(`${name} failed in ${Date.now() - started} ms: ${text}`)
-          reply(result(id, { content: [{ type: 'text', text }], isError: true }))
-        }
+          reply(result(id, { content: [{ type: 'text', text: error.execution ? JSON.stringify({ ok: false, error: text, execution: error.execution }) : text }], isError: true }))
+        } finally { if (requests.get(id) === controller) requests.delete(id) }
         return
       }
       case 'resources/list':
@@ -254,6 +270,8 @@ export function createMcpServer(options = {}) {
     if (!initialized) log(`serving on stdio, workspace ${registry.cwd}, ${registry.tools.length} tools`)
     startStdio({
       onMessage: handleMessage,
+      onQueued: reserve,
+      onClosing: () => { for (const controller of requests.values()) controller.abort(new Error('MCP transport closed')) },
       onClose: () => {
         log('stdin closed, exiting')
         process.exit(0)
@@ -262,7 +280,7 @@ export function createMcpServer(options = {}) {
     })
   }
 
-  return { registry, start, handleMessage }
+  return { registry, start, handleMessage, activeRequestCount: () => requests.size }
 }
 
 export { SERVER_NAME, SERVER_VERSION }

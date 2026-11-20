@@ -1,6 +1,7 @@
 import { createDeviceRunner, isReadOnlyCommand, matchExpect } from './lib/device-execution.js'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -12,11 +13,14 @@ import Schema from '@deepseek-ai/schemastery'
 
 import { Bridge, runProcess, sleep } from './lib/bridge-client.js'
 import { VrpSession, probePort } from './lib/cli.js'
+import { executionOptions, checkControl, controlledDelay, remainingTime } from './lib/execution-control.js'
+import { topologyLayout } from './lib/topology-layout.js'
 import { prepareCliEntries } from './lib/cli-plan.js'
 import { readRecoveryPlan, listChangeJournals } from './lib/change-journal.js'
 import { createRedactor, credentialValues, redactValue } from './lib/redaction.js'
 import { waitDevicesReady } from './lib/device-ready.js'
 import { buildInfo } from './lib/build-info.js'
+import { instrumentTool } from './lib/operation-context.js'
 import { hydrateInputs } from './lib/credential-input.js'
 import { normalizeGuiSteps, GUI_STEP_SCHEMA } from './lib/gui-contract.js'
 import { validateLabPlan, runLabTest, renderLabReports } from './lib/lab-test.js'
@@ -38,6 +42,8 @@ export const Config = Schema.object({
   textTakeoverNotice: Schema.boolean().default(true),
   registerSkill: Schema.boolean().default(true),
   injectPrompt: Schema.boolean().default(true),
+  diagnosticLogging: Schema.boolean().default(true),
+  diagnosticDirectory: Schema.string().default(''),
   enspExecutable: Schema.string().default('C:/Program Files/Huawei/eNSP/eNSP_Client.exe'),
   toolbarStart: Schema.array(Schema.number()).default([659, 56]),
   toolbarStop: Schema.array(Schema.number()).default([698, 56]),
@@ -56,7 +62,11 @@ const SKILL_PATH = join(SKILL_ROOT, 'SKILL.md')
 
 const PROMPT_SECTION = `## eNSP 实验自动化（dsh-ensp）
 
+拓扑绘图、排版或标注覆盖时使用 ensp-topology-drawing。ensp_topo 的 layout-inspect 检查原图，layout-preview 预览避让，layout-apply 写入新 .topo 副本。
+
 ENSPLB 增强：ensp_cli 批次整体预校验后顺序执行，失败默认跳过后续设备；continue_on_error:true 可继续其他设备。检查整体 ok、failure、skipped、saved.ok；失败不会回滚已生效的配置。重复验收用 ensp_labtest 的 JSON 计划和 report_prefix 生成 Markdown/CSV/JSON，状态区分 PASS/FAIL/ERROR/SKIPPED。echo_to_window 仅接受 display/ping/tracert，配置不重复执行。
+
+每次调用的 execution 含 operation_id、验证层级和证据持久化状态。包装脚本必须严格检查 ok===true，或使用 dsh-ensp-fusion/result 的 assertOperationSucceeded；不得吞异常或按不抛错累计通过。GUI dispatched 只表示投递，业务仍需独立断言。ensp_lldp 的 DIFFERENT/INCONCLUSIVE 聚合为失败或证据不足。
 
 操作华为 eNSP 网络实验时按下面的顺序执行，不要凭记忆猜坐标或命令。
 
@@ -87,7 +97,7 @@ ENSPLB 增强：ensp_cli 批次整体预校验后顺序执行，失败默认跳�
 - eNSP 是提权进程：普通权限进程的 PostMessage/SetWindowPos 会返回"拒绝访问"。本项目自带的 shell 提权桥（bridge.py）负责点击，别用别的方式模拟输入。
 - 提权桥靠 \`ShellExecuteW("runas")\` 启动。授权行为取决于系统策略；**换到 UAC 默认设置的机器，第一次（或每个 job，取决于 mode）会弹出一次 UAC 授权框**，需要用户点一次"是"。遇到桥不可用又看不出别的原因，先问用户是不是把授权框点了拒绝（返回码 1223 = 用户取消）。
 - 永远不要给 eNSP 的自绘状态栏发 SB_GETPARTS 之类的 WM_USER 消息——会直接让客户端崩溃。要判断选中数量就看截图。
-- 设备图标要先选中（点空白处 + Ctrl+A）再点工具栏"启动"；工具栏在非客户区，只能真实点击。
+- start_all 默认使用带前台检查的 Ctrl+Alt+A；method:toolbar 才全选后点工具栏。启动/停止只投递一次，端口超时不自动重放；先检查当前设备状态。
 - 真实点击一定要带 \`expect\`（"ensp" / 窗口标题 / hwnd）：用户很可能开着别的全屏窗口盖住 eNSP，裸点击会打到人家窗口里。带 \`expect\` 时桥会先把 eNSP 抬到最上层再确认坐标归属，否则拒绝点击。
 - 发按键（Ctrl+A、打字）前必须先 \`activate\`；\`safetype\` 在窗口没拿到前台时会直接拒绝，别绕过它。
 - 设备窗口不能用 ShowWindow 显示（eNSP 会立刻再隐藏），只能双击画布图标打开；**隐藏窗口截图拿到的是旧画面**，所以 \`ensp_shot target=device\` 必须先确保窗口可见（需要 \`topology_path\`）。
@@ -463,7 +473,7 @@ function statSyncSafe(path) {
   }
 }
 
-function createTools(config, bridge) {
+function createTools(config, bridgeRoot) {
   const tools = []
 
   tools.push(defineTool({
@@ -471,6 +481,7 @@ function createTools(config, bridge) {
     description: 'Report the eNSP situation before doing anything else: running client windows (pid/rect/topology path when detectable), installed eNSP versions, GUI-bridge health and privilege, and the device inventory of a topology file.',
     parameters: {
       topology_path: { type: 'string', description: 'Optional .topo path; when given its devices, models and telnet ports are returned.' },
+      bridge_tasks: { type: 'array', items: { type: 'string' }, description: 'Query retained bridge task IDs from an unconfirmed operation in this plugin instance.' },
       include_telnet: { type: 'boolean', description: 'Probe the telnet console ports of the topology; defaults to false.' },
     },
     output: {
@@ -481,11 +492,13 @@ function createTools(config, bridge) {
           workspaceRoot: { type: 'string', required: true },
           bridge: { type: 'object', additionalProperties: true, required: true },
           build: { type: 'object', additionalProperties: true },
+          observedAt: { type: 'string', description: 'UTC time of this status observation; loadedAt identifies module load, not evidence freshness.' },
           runtime: { type: 'object', additionalProperties: true },
           instances: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           installed: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           deviceWindows: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           topology: { type: 'object', additionalProperties: true },
+          bridgeTasks: { type: 'array', items: { type: 'object', additionalProperties: true } },
           telnet: { type: 'array', items: { type: 'object', additionalProperties: true } },
           notes: { type: 'array', items: { type: 'string' }, required: true },
         },
@@ -494,7 +507,11 @@ function createTools(config, bridge) {
     },
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const notes = []
+      const taskStates = []
+      for (const id of args.bridge_tasks ?? []) { checkControl(executionOptions(exec)); taskStates.push(await bridge.queryTask(id)) }
       const installed = await listInstalledEnsp(config)
       const steps = [{ op: 'ping' }, { op: 'ensp' }, ...installed.map((entry) => ({ op: 'exeinfo', path: entry.path }))]
       let bridgeInfo = { available: false, error: 'bridge not started' }
@@ -558,15 +575,15 @@ function createTools(config, bridge) {
         if (args.include_telnet) {
           telnet = await Promise.all(parsed.devices
             .filter((device) => device.comPort > 0)
-            .map((device) => probePort(device.comPort)))
+            .map((device) => probePort(device.comPort, executionOptions(exec))))
           const down = telnet.filter((entry) => !entry.open)
           if (down.length > 0) notes.push(`以下控制台端口未开放（设备未启动或起不来）：${down.map((entry) => entry.port).join(', ')}`)
         }
       }
 
       return lossless({
-        workspaceRoot: sessionWorkspace(exec),
-        build: buildInfo(), runtime,
+        workspaceRoot: sessionWorkspace(exec), bridgeTasks: taskStates,
+        build: buildInfo(), observedAt: new Date().toISOString(), runtime,
         bridge: bridgeInfo,
         instances,
         installed,
@@ -615,33 +632,14 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       if (!Array.isArray(args.steps) || args.steps.length === 0) throw new Error('steps must be a non-empty array')
       args = await hydrateInputs(args, (path, kind) => resolveWorkspacePath(path, exec, config, { mustExist: true, kind }))
       // DSH's tool pipeline deep-freezes model arguments before invoking a
       // definition. Keep the validated caller snapshot immutable and normalize
       // paths on plugin-owned step records instead.
       const guiSteps = normalizeGuiSteps(args.steps, args.timeout_ms ?? config.timeoutMs)
-      for (const step of guiSteps) {
-        if (!step || typeof step !== 'object' || typeof step.op !== 'string') throw new Error('each GUI step requires op')
-        if (step.op === 'select_tab' && (!Number.isInteger(step.index) || step.index < 0)) throw new Error('select_tab index must be a nonnegative integer')
-        if (step.op === 'select_list') {
-          if ((step.index !== undefined) === (step.text !== undefined)) throw new Error('select_list requires exactly one index or text')
-          if (step.index !== undefined && (!Number.isInteger(step.index) || step.index < 0)) throw new Error('select_list index must be a nonnegative integer')
-          if (step.text !== undefined && (typeof step.text !== 'string' || !step.text.trim() || /[\p{Cc}]/u.test(step.text))) throw new Error('select_list text must be a nonempty label')
-          if (step.expected_count !== undefined && (!Number.isSafeInteger(step.expected_count) || step.expected_count < 1)) throw new Error('select_list expected_count must be a positive integer')
-        }
-        if (step.op === 'start_all' && step.method !== undefined && !['keyboard','toolbar'].includes(step.method)) throw new Error('start_all method must be keyboard or toolbar')
-        if (['start_all','stop_all'].includes(step.op) && step.hwnd !== undefined && (!Number.isSafeInteger(step.hwnd)||step.hwnd<1)) throw new Error('start_all/stop_all hwnd must be a positive integer')
-        if (step.op === 'close_project' && step.save !== undefined && !['ask', 'save', 'discard', 'cancel'].includes(step.save)) {
-          throw new Error('invalid close_project save policy')
-        }
-        if (step.op === 'wait_ports') {
-          if ((!Array.isArray(step.ports) || step.ports.length === 0) && !args.topology_path) throw new Error('wait_ports requires ports or topology_path')
-          if (step.ports !== undefined && (!Array.isArray(step.ports) || step.ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535))) throw new Error('invalid wait_ports ports')
-          if (step.timeout_ms !== undefined && (!Number.isSafeInteger(step.timeout_ms) || step.timeout_ms < 0)) throw new Error('invalid wait_ports timeout')
-          if (step.want !== undefined && !['open', 'closed'].includes(step.want)) throw new Error('invalid wait_ports state')
-        }
-      }
       for (const key of ['start_wait_ms', 'stop_wait_ms', 'ready_wait_ms']) {
         if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || args[key] <= 0)) throw new Error(`${key} must be a positive integer`)
       }
@@ -656,8 +654,20 @@ function createTools(config, bridge) {
         readyCredentials.set(key, { username: entry.username, password: entry.password })
       }
       // Validate the whole batch before any GUI action, including raw open.
-      for (const step of guiSteps) {
-        if (step.op === 'open' && typeof step.path === 'string' && extname(step.path).toLowerCase() === '.topo') {
+      for (const [index, step] of guiSteps.entries()) {
+        if (['shot', 'screen'].includes(step.op)) {
+          try {
+            step.out = await resolveWorkspacePath(step.out, exec, config, { kind: 'out' })
+            let target = step.out
+            for (;;) {
+              try { const info = await stat(target); if (target === step.out ? !info.isFile() : !info.isDirectory()) throw new Error('output or parent is not a regular file/directory'); break }
+              catch (error) { if (error.code !== 'ENOENT') throw error; target = dirname(target) }
+            }
+          } catch (error) {
+            throw Object.assign(new Error('steps[' + index + '].out: ' + error.message), { code: 'ENSP_GUI_VALIDATION', stepIndex: index, field: 'out' })
+          }
+        }
+        if (['open', 'explore'].includes(step.op) && extname(step.path).toLowerCase() === '.topo') {
           const path = await resolveWorkspacePath(step.path, exec, config, { mustExist: true, kind: 'topology_path' })
           const topology = await readTopo(path)
           validateTopoConsolePorts(topology.text)
@@ -683,6 +693,18 @@ function createTools(config, bridge) {
       for (const key of readyCredentials.keys()) {
         if (!devices?.some(device => device.name.toLowerCase() === key && device.comPort > 0)) throw new Error('readiness device not found in topology')
       }
+      for (const [index, step] of guiSteps.entries()) {
+        if (['open_console', 'device_window'].includes(step.op)
+          && devices?.filter(device => device.name.toLowerCase() === step.device.toLowerCase()).length !== 1) {
+          throw Object.assign(new Error('steps[' + index + '].device: must resolve to one topology device'), { code: 'ENSP_GUI_VALIDATION', stepIndex: index, field: 'device' })
+        }
+        if (step.op === 'wait_ports' && !step.ports?.length && !devices?.some(device => device.comPort > 0)) {
+          throw Object.assign(new Error('steps[' + index + '].ports: no topology console ports'), { code: 'ENSP_GUI_VALIDATION', stepIndex: index, field: 'ports' })
+        }
+      }
+      // Complete all path and topology checks before any GUI input. Directory
+      // preparation is deferred until the entire plan has passed preflight.
+      for (const step of guiSteps) if (['shot', 'screen'].includes(step.op)) await prepareOutput(step.out, true, 'out')
 
       const results = []
       let pending = []
@@ -691,7 +713,7 @@ function createTools(config, bridge) {
       const run = async (steps) => {
         let batchResult
         try {
-          batchResult = await bridge.steps(steps, { timeoutMs: args.timeout_ms, stopOnError: true })
+          batchResult = await bridge.steps(steps, { timeoutMs: args.timeout_ms, stopOnError: true, operation: exec.operation })
         } catch (error) {
           batchResult = { steps: [{ op: 'bridge_transport', ok: false, error: error.message,
             uncertain: true, message: 'Do not replay; inspect actual device and window state.' }] }
@@ -724,29 +746,30 @@ function createTools(config, bridge) {
           needsCursor ||= !keyboard
           const ports = devices.filter(device => device.comPort > 0).map(device => device.comPort)
           let open = []
-          let attempts = 0
+          let unknown = []
           let portStateVerified = false
-          for (; attempts < 2; attempts++) {
-            const selector=step.hwnd===undefined?{ensp:true}:{hwnd:step.hwnd}
-            await run(keyboard ? [{ op: 'start_devices', ...selector }] : [{ op: 'device_control', ...selector,
-              toolbar: op === 'start_all' ? config.toolbarStart : config.toolbarStop }])
-            if (halted) break
-            open = await watchPorts(ports, op === 'start_all' ? 'open' : 'closed',
+          const selector=step.hwnd===undefined?{ensp:true}:{hwnd:step.hwnd}
+          await run(keyboard ? [{ op: 'start_devices', ...selector }] : [{ op: 'device_control', ...selector,
+            toolbar: op === 'start_all' ? config.toolbarStart : config.toolbarStop }])
+          if (!halted) {
+            const observed = await watchPorts(ports, op === 'start_all' ? 'open' : 'closed',
               op === 'start_all' ? args.start_wait_ms ?? 25000 : args.stop_wait_ms ?? 12000)
-            portStateVerified = true
-            if (op === 'start_all' ? open.length === ports.length : open.length === 0) break
+            open = observed.open; unknown = observed.unknown
+            portStateVerified = unknown.length === 0
           }
-          const transportReady = !halted && (op === 'start_all' ? open.length === ports.length : open.length === 0)
+          const transportReady = !halted && portStateVerified && (op === 'start_all' ? open.length === ports.length : open.length === 0)
           let readiness
           if (!halted && transportReady && op === 'start_all') {
             readiness = await waitDevicesReady(devices.filter(device => device.comPort > 0).map(device => ({ ...device,
-              ...readyCredentials.get(device.name.toLowerCase()) })), { timeoutMs: args.ready_wait_ms ?? (devices.some(d => /^USG/iu.test(d.model ?? '')) ? 240000 : 120000) })
+              ...readyCredentials.get(device.name.toLowerCase()) })), { ...executionOptions(exec), timeoutMs: args.ready_wait_ms ?? (devices.some(d => /^USG/iu.test(d.model ?? '')) ? 240000 : 120000) })
           }
           const ok = !halted && transportReady && (!readiness || readiness.ok)
-          results.push({ index: results.length, op, ok, attempts: Math.min(attempts + 1, 2),
+          results.push({ index: results.length, op, ok, attempts: 1,
             portStateVerified, open: portStateVerified ? open : null,
+            unknownPorts: unknown,
             missing: portStateVerified ? (op === 'start_all' ? ports.filter(port => !open.includes(port)) : open) : null,
             transportReady, ...(readiness ? { readiness } : {}),
+            ...(!ok ? { retrySuppressed: true, retryReason: 'Control was dispatched once; inspect current device state before any new plan.' } : {}),
             ...(ok ? {} : { error: halted ? 'GUI control failed; device state is unconfirmed; inspect preceding steps' : transportReady ? 'device prompt and VRP readiness not confirmed' : 'console ports did not reach requested state' }) })
           halted ||= !ok
           continue
@@ -763,20 +786,20 @@ function createTools(config, bridge) {
           if (wanted.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) throw new Error('wait_ports ports must be integers in 1..65535')
           if (step.timeout_ms !== undefined && (!Number.isSafeInteger(step.timeout_ms) || step.timeout_ms < 0)) throw new Error('wait_ports timeout_ms must be nonnegative')
           const want = step.want === 'closed' ? 'closed' : 'open'
-          const started = Date.now()
-          const open = await watchPorts(wanted, want, Number(step.timeout_ms ?? 180000))
-          const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+          const started = performance.now()
+          const { open, unknown } = await watchPorts(wanted, want, Number(step.timeout_ms ?? 180000))
+          const elapsed = ((performance.now() - started) / 1000).toFixed(1)
           const missing = wanted.filter((port) => !open.includes(port))
-          const settled = want === 'open' ? missing.length === 0 : open.length === 0
+          const settled = unknown.length === 0 && (want === 'open' ? missing.length === 0 : open.length === 0)
           results.push({ index: results.length, op: 'wait_ports', ok: settled, want, ports: wanted, open, missing: want === 'open' ? missing : open,
-            elapsedMs: Date.now() - started, ...(settled ? {} : { error: 'console ports did not reach the requested state before timeout' }) })
+            unknownPorts: unknown, elapsedMs: performance.now() - started, ...(settled ? {} : { error: 'console ports did not reach the requested state before timeout' }) })
           halted ||= !settled
           if (want === 'open') {
             notes.push(missing.length === 0
               ? `等待 ${elapsed} s 后端口全部开放（${open.join(', ')}）。`
               : `等待 ${elapsed} s，仍未开放的端口：${missing.join(', ')}（已开放 ${open.join(', ') || '无'}）。防火墙/虚拟机启动慢是常态，可加大 timeout_ms 或先做别的。`)
           } else {
-            notes.push(settled ? `等待 ${elapsed} s 后端口全部关闭。` : `等待 ${elapsed} s 后仍有端口开放：${open.join(', ')}。`)
+            notes.push(settled ? `等待 ${elapsed} s 后端口全部关闭。` : `等待 ${elapsed} s 后未确认全部关闭；开放：${open.join(', ') || '无'}；未知：${unknown.join(', ') || '无'}。`)
           }
           continue
         }
@@ -815,12 +838,6 @@ function createTools(config, bridge) {
         if (['click', 'ncclick', 'drag', 'device_control', 'device_click', 'normalize_canvas', 'close_project'].includes(op)) needsCursor = true
         // Raw file-writing ops must land in the session workspace, not in the
         // bridge's own working directory (which is the plugin's lib folder).
-        if (typeof step.out === 'string' && step.out !== '') {
-          const out = await resolveWorkspacePath(step.out, exec, config, { kind: 'out' })
-          await prepareOutput(out, true, 'out')
-          pending.push({ ...step, out })
-          continue
-        }
         pending.push(step)
       }
       await flush()
@@ -830,14 +847,16 @@ function createTools(config, bridge) {
       // Function declaration (not a const arrow) so wait_ports can call it from
       // inside the step loop, which runs before this point in the source.
       async function watchPorts(ports, want, timeoutMs) {
-        const deadline = Date.now() + timeoutMs
+        const deadline = performance.now() + timeoutMs
         let open = []
         for (;;) {
-          const probes = await Promise.all(ports.map((port) => probePort(port, { timeoutMs: 700 })))
+          checkControl(executionOptions(exec))
+          const probes = await Promise.all(ports.map((port) => probePort(port, { ...executionOptions(exec), timeoutMs: timeoutMs === 0 ? 700 : Math.max(1, Math.min(700, deadline - performance.now())) })))
           open = probes.filter((probe) => probe.open).map((probe) => probe.port)
-          const settled = want === 'open' ? open.length === ports.length : open.length === 0
-          if (settled || Date.now() > deadline) return open
-          await new Promise((resolve) => { setTimeout(resolve, 800) })
+          const unknown = probes.filter(probe => !probe.open && probe.reason !== 'ECONNREFUSED').map(probe => probe.port)
+          const settled = unknown.length === 0 && (want === 'open' ? open.length === ports.length : open.length === 0)
+          if (settled || performance.now() >= deadline) return { open, unknown }
+          await controlledDelay(Math.min(800, deadline - performance.now()), executionOptions(exec))
         }
       }
       if (needsCursor && !args.allow_cursor_takeover) {
@@ -894,6 +913,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const specs = Array.isArray(args.shots) && args.shots.length > 0
         ? args.shots
         : [{
@@ -962,6 +983,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const notes = []
       const path = await resolveWorkspacePath(args.topology_path, exec, config, { mustExist: true, kind: 'topology_path' })
       const devices = (await readTopo(path)).devices
@@ -992,6 +1015,7 @@ function createTools(config, bridge) {
             continue
           } else {
             const session = new VrpSession({
+              ...executionOptions(exec),
               port: target.comPort,
               username: spec.username,
               password: spec.password,
@@ -1095,7 +1119,7 @@ function createTools(config, bridge) {
       devices: {
         type: 'array',
         items: { type: 'object', additionalProperties: true },
-        description: 'Configure several devices in ONE call: [{device, port?, commands, expect?, system_view?, username?, password?, save?, output_file?}]. Validate the whole batch first, then run in order and stop subsequent devices on failure.',
+        description: 'Configure several devices in ONE call: [{device, port?, commands, expect?, system_view?, username?, password?, save?, output_file?}]. Each device inherits top-level system_view and save unless it supplies its own boolean. Validate the whole batch first, then run in order and stop subsequent devices on failure.',
       },
       continue_on_error: { type: 'boolean', description: 'Continue with remaining devices after a failed device; defaults to false. Commands on a failed device always stop.' },
       device: { type: 'string', description: 'Device name from the topology (resolves the port).' },
@@ -1140,6 +1164,9 @@ function createTools(config, bridge) {
           saved: { type: 'object', additionalProperties: true },
           checks: { type: 'array', items: { type: 'object', additionalProperties: true } },
           setupResults: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          command_effects: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          recovery_verified: { type: 'object', additionalProperties: true },
+          error: { type: 'string' },
           failure: { type: 'object', additionalProperties: true },
           artifactError: { type: 'object', additionalProperties: true },
           change_journal: { type: 'string' },
@@ -1154,6 +1181,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const notes = []
       if (args.dry_run !== undefined && typeof args.dry_run !== 'boolean') throw new Error('dry_run must be boolean')
       if (args.list_changes !== undefined) {
@@ -1202,6 +1231,7 @@ function createTools(config, bridge) {
       const runs = []
       let stopped = false
       for (const entry of entries) {
+        checkControl(executionOptions(exec))
         if (stopped) {
           runs.push({ device: entry.device, port: entry.port, prompt: '', results: [], checks: [], ok: false,
             skipped: entry.commands, saved: { performed: false, reason: 'previous-device-failed' }, notes: ['Skipped after previous device failure.'] })
@@ -1259,6 +1289,8 @@ function createTools(config, bridge) {
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => renderJson(value) },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       if (typeof args.report_prefix !== 'string' || !args.report_prefix.trim()) throw new Error('report_prefix must be a non-empty string')
       const planPath = await resolveWorkspacePath(args.plan_path, exec, config, { mustExist: true, kind: 'plan_path' })
       const plan = await hydrateInputs(JSON.parse(await readFile(planPath, 'utf8')), (path, kind) => resolveWorkspacePath(resolve(dirname(planPath), path), exec, config, { mustExist: true, kind }))
@@ -1276,6 +1308,7 @@ function createTools(config, bridge) {
       }
       let nextDevice = 0
       const report = await runLabTest(plan, {
+        ...executionOptions(exec),
         runDevice: async (entry) => {
           const target = prepared[nextDevice++]
           return runOnDevice({ ...entry, port: target.port }, { devices, exec, config, bridge, echoArgs: null })
@@ -1292,7 +1325,7 @@ function createTools(config, bridge) {
     description: 'Read or rewrite an eNSP .topo file without touching the GUI: list devices with models and console ports, rename devices, set PC/server IPv4, renumber console ports, or propose SW1/SW2/AR1 names.',
     parameters: {
       topology_path: { type: 'string', required: true, description: 'Existing .topo file inside the workspace.' },
-      action: { type: 'string', required: true, description: 'list | suggest-names | rename | set-ip | set-ports.' },
+      action: { type: 'string', required: true, description: 'list | suggest-names | rename | set-ip | set-ports | layout-inspect | layout-preview | layout-apply. Layout uses estimated geometry. Apply requires a fresh .topo out_path.' },
       renames: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'For rename: [{from, to}].' },
       device: { type: 'string', description: 'For set-ip: device name.' },
       ip: { type: 'string' },
@@ -1311,6 +1344,7 @@ function createTools(config, bridge) {
           action: { type: 'string', required: true },
           version: { type: 'string', required: true },
           devices: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
+          layout: { type: 'object', additionalProperties: true },
           suggestions: { type: 'array', items: { type: 'object', additionalProperties: true }, required: true },
           written: { type: 'string' },
           notes: { type: 'array', items: { type: 'string' }, required: true },
@@ -1319,6 +1353,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const path = await resolveWorkspacePath(args.topology_path, exec, config, { mustExist: true, kind: 'topology_path' })
       await assertRegularFile(path, 'topology_path')
       if (extname(path).toLowerCase() !== '.topo') throw new Error('topology_path must end in .topo')
@@ -1326,9 +1362,23 @@ function createTools(config, bridge) {
       const action = String(args.action)
       const notes = []
       let text = parsed.text
-      let written
+      let written, layout
 
-      if (action === 'rename') {
+      if (['layout-inspect', 'layout-preview', 'layout-apply'].includes(action)) {
+        if (action !== 'layout-apply' && args.out_path !== undefined) throw Error('out_path requires layout-apply')
+        const candidate = topologyLayout(text, { correct: action !== 'layout-inspect' })
+        layout = candidate.report
+        if (action === 'layout-apply') {
+          if (!args.out_path || extname(args.out_path).toLowerCase() !== '.topo' || args.allow_overwrite) {
+            throw Error('layout-apply requires a new .topo out_path with overwrite disabled')
+          }
+          const out = await resolveWorkspacePath(args.out_path, exec, config, { kind: 'out_path' })
+          await prepareOutput(out, false, 'out_path')
+          checkControl(executionOptions(exec))
+          await writeTopo(out, candidate.text, { encoding: parsed.encoding, bom: parsed.bom, flag: 'wx' })
+          written = out
+        }
+      } else if (action === 'rename') {
         const renames = Array.isArray(args.renames) ? args.renames : []
         if (renames.length === 0) throw new Error('rename needs renames: [{from, to}]')
         for (const item of renames) text = renameDevice(text, String(item.from), String(item.to))
@@ -1357,6 +1407,7 @@ function createTools(config, bridge) {
       return lossless({
         topologyPath: path,
         action,
+        ...(layout && { layout }),
         version: after.version ?? '',
         devices: describeDevices(after),
         suggestions: action === 'suggest-names' ? suggestNames(after.devices) : [],
@@ -1392,6 +1443,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const notes = []
       const source = await resolveWorkspacePath(args.path, exec, config, { mustExist: true, kind: 'reference file' })
       const base = basename(source).replace(/\.[^.]+$/u, '')
@@ -1409,7 +1462,10 @@ function createTools(config, bridge) {
         })
       }
       const python = await resolveDocsPython(config, notes)
-      const run = await runProcess(python, [REF_SCRIPT, source, out], { timeoutMs: 120000 })
+      const token = exec.operation?.control.dispatch()
+      const run = await runProcess(python, [REF_SCRIPT, source, out], { timeoutMs: remainingTime(executionOptions(exec), 120000), signal: exec.signal })
+      exec.operation?.control.observe(token)
+      checkControl(executionOptions(exec))
       if (run.code !== 0) {
         throw new Error(`reference dump failed: ${run.stderr.trim() || run.stdout.trim()}`)
       }
@@ -1471,6 +1527,8 @@ function createTools(config, bridge) {
       render: (_args, value) => renderJson(value),
     },
     async execute(args, exec) {
+      const bridge = bridgeRoot.forOperation(exec.operation)
+      checkControl(executionOptions(exec))
       const notes = []
       const dir = await resolveWorkspacePath(args.output_dir, exec, config, { kind: 'output_dir' })
       await mkdir(dir, { recursive: true })
@@ -1507,6 +1565,7 @@ function createTools(config, bridge) {
       const dirWork = await mkdtemp(join(tmpdir(), 'dsh-ensp-doc-'))
       const built = []
       for (const [mode, out] of [['captioned', captionedOut], ['bare', bareOut]]) {
+        checkControl(executionOptions(exec))
         const manifest = { ...manifestBase, mode, output: out }
         if (mode === 'bare' && template) {
           manifest.mode = 'template'
@@ -1514,7 +1573,10 @@ function createTools(config, bridge) {
         }
         const manifestPath = join(dirWork, `${mode}.json`)
         await writeFile(manifestPath, JSON.stringify(manifest, null, 1), 'utf8')
-        const run = await runProcess(python, [DOCS_SCRIPT, manifestPath], { timeoutMs: 120000 })
+        const token = exec.operation?.control.dispatch()
+        const run = await runProcess(python, [DOCS_SCRIPT, manifestPath], { timeoutMs: remainingTime(executionOptions(exec), 120000), signal: exec.signal })
+        exec.operation?.control.observe(token)
+        checkControl(executionOptions(exec))
         if (run.code !== 0) {
           throw new Error(`document build failed (${mode}): ${run.stderr.trim() || run.stdout.trim()}`)
         }
@@ -1647,7 +1709,7 @@ export function apply(ctx, config) {
       text: PROMPT_SECTION,
     })
   }
-  for (const tool of createTools(config, bridge)) ctx.tools.register(tool)
+  for (const tool of createTools(config, bridge)) ctx.tools.register(instrumentTool(tool, config))
 }
 
 export { PROMPT_SECTION, BRIDGE_PATH, DOCS_SCRIPT }

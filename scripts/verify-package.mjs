@@ -12,6 +12,7 @@ function run(command,args,cwd){const r=spawnSync(command,args,{cwd,encoding:'utf
 const temp=await mkdtemp(join(tmpdir(),'ensp-fusion-package-'))
 try{
   const metadata=JSON.parse(run(npm,['pack','--ignore-scripts','--json','--pack-destination',temp],root))[0]
+  assert.ok(metadata.files.every(file=>!/(?:^|\/)__pycache__\/|\.py[co]$/iu.test(file.path)), 'Python bytecode and cache directories must not be distributed')
   for(const file of ['index.js','base.js','LICENSE','LICENSE-MIT','upstream/lizi600jin/LICENSE','test/fixtures/minimal.topo','lib/bridge.py','lib/usg-health.js','requirements-windows.lock.txt','bin/ensp-fusion-accept.mjs','bin/ensp-fusion-doctor.mjs','CHANGELOG.md','CONTRIBUTING.md',`docs/releases/${manifest.version}.zh-CN.md`,'docs/KNOWN-ISSUES.zh-CN.md','docs/GITHUB-RELEASE.zh-CN.md'])assert.ok(metadata.files.some(f=>f.path===file),file)
   run('tar',['-xf',join(temp,metadata.filename),'-C',temp],temp)
   const pkg=join(temp,'package')

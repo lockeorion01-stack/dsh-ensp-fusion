@@ -9,6 +9,8 @@ import {evaluateBusinessEvidence} from '../lib/business-evidence.js'
 import {prepareNativeServices} from '../lib/native-service-recovery.js'
 import {readTopo} from '../lib/topo.js'
 import {evaluateUsgHealth} from '../lib/usg-health.js'
+import {processCancellation} from '../lib/execution-control.js'
+const cancellation=processCancellation()
 const [command,path,workspace=process.cwd(),output='acceptance-runs']=process.argv.slice(2)
 async function main(){
  if(!command||command==='--help'){console.log('ensp-fusion-accept run <plan.json> [workspace] [output-directory]\nensp-fusion-accept status <run-directory>\nensp-fusion-accept recover <run-directory> <original-plan.json> [workspace]\nensp-fusion-accept assess <business-evidence.json>\nensp-fusion-accept usg-health <resource-samples-and-limits.json>\nensp-fusion-accept services-check <manifest.json> <topology.topo> [workspace]');return}
@@ -32,10 +34,10 @@ async function main(){
   const runDir=await realpath(resolve(path)),rel=relative(root,runDir)
   if(isAbsolute(rel)||rel==='..'||rel.startsWith('..\\')||rel.startsWith('../'))throw Error('Run directory escapes workspace')
   const plan=JSON.parse((await readFile(resolve(process.argv[4]),'utf8')).replace(/^\uFEFF/u,''))
-  const registry=createRegistry({workspace:root,overrides:{timeoutMs:240000}})
+  const registry=createRegistry({workspace:root,entrypoint:'acceptance',overrides:{timeoutMs:240000}})
   preflightAcceptance(plan,registry.tools)
-  const result=await recoverAcceptance({runDir,plan,tools:registry.tools.map(t=>t.name),execute:async(name,args)=>{
-   const tool=registry.tools.find(t=>t.name===name);validateToolArguments(args,tool.inputSchema);return tool.handler(args,registry.exec)
+  const result=await recoverAcceptance({runDir,plan,signal:cancellation.signal,tools:registry.tools.map(t=>t.name),execute:async(name,args,context={})=>{
+   const tool=registry.tools.find(t=>t.name===name);validateToolArguments(args,tool.inputSchema);return tool.handler(args,{...registry.exec,...context})
   }})
   console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=1
   return
@@ -50,14 +52,14 @@ async function main(){
  const parentRel=relative(root,parent)
  if(isAbsolute(parentRel)||parentRel==='..'||parentRel.startsWith('..\\')||parentRel.startsWith('../'))throw Error('Output parent escapes workspace')
  const plan=JSON.parse((await readFile(resolve(path),'utf8')).replace(/^\uFEFF/u,''))
- const registry=createRegistry({workspace:root,overrides:{timeoutMs:240000}}),controller=new AbortController()
+ const registry=createRegistry({workspace:root,entrypoint:'acceptance',overrides:{timeoutMs:240000}}),controller=new AbortController()
  preflightAcceptance(plan,registry.tools)
  const cancel=()=>controller.abort(new Error('Operator cancelled acceptance'))
  process.once('SIGINT',cancel);process.once('SIGTERM',cancel)
  try{
  const result=await runAcceptance({plan,outputRoot:target,tools:registry.tools.map(t=>t.name),signal:controller.signal,
-  execute:async(name,args)=>{const tool=registry.tools.find(t=>t.name===name);validateToolArguments(args,tool.inputSchema);return tool.handler(args,registry.exec)}})
+  execute:async(name,args,context={})=>{const tool=registry.tools.find(t=>t.name===name);validateToolArguments(args,tool.inputSchema);return tool.handler(args,{...registry.exec,...context})}})
  console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=1
  }finally{process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel)}
 }
-main().catch(e=>{console.error(e.message);process.exitCode=1})
+main().catch(e=>{console.error(e.message);process.exitCode=1}).finally(()=>{if(cancellation.signal.aborted)process.exitCode=130;cancellation.dispose()})

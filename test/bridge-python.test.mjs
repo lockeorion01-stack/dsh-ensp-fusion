@@ -41,6 +41,7 @@ for name in ('win32api', 'win32clipboard', 'win32con', 'win32gui', 'win32process
 pil = types.ModuleType('PIL')
 pil.Image = None
 sys.modules['PIL'] = pil
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
 b = types.ModuleType('bridge_under_test')
 b.__file__ = sys.argv[1]
 exec(compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec'), b.__dict__)
@@ -632,6 +633,107 @@ class FakeImage:
         return FakeImage(self.case, (box[2] - box[0], box[3] - box[1]))
     def save(self, _):
         self.case.events.append(('image-saved', self.size))
+
+
+class CancellationTests(unittest.TestCase):
+    def test_job_cancel_before_launch_and_between_steps_is_bound_to_task_identity(self):
+        import json, tempfile
+        from pathlib import Path
+        for mode in ('before', 'between', 'wrong-identity'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                task_id = 'test-job-identity-0001'
+                result, cancel = Path(folder) / 'result.json', Path(folder) / 'cancel.json'
+                job = Path(folder) / 'job.json'
+                job.write_text(json.dumps(dict(task_id=task_id, cancel_path=str(cancel), result=str(result),
+                    timeout_ms=1000, steps=[dict(op='first'), dict(op='never')])), encoding='utf8')
+                seen = []
+                def dispatch(op, args):
+                    seen.append(op)
+                    cancel.write_text(json.dumps(dict(task_id=task_id if mode == 'between' else 'other-task-identity')), encoding='utf8')
+                    return {}
+                if mode == 'before':
+                    cancel.write_text(json.dumps(dict(task_id=task_id)), encoding='utf8')
+                from contextlib import nullcontext
+                with patch.object(b, 'gui_transaction', nullcontext), patch.object(b, 'dispatch', dispatch), patch.object(b, 'is_elevated', return_value=False):
+                    b.run_job(str(job))
+                evidence = json.loads(result.read_text(encoding='utf8'))
+                self.assertTrue(evidence['stop_confirmed'])
+                self.assertEqual(seen, [] if mode == 'before' else ['first'] if mode == 'between' else ['first', 'never'])
+                self.assertEqual(evidence['state'], 'finished' if mode == 'wrong-identity' else 'cancelled')
+
+    def test_resident_cancel_bypasses_gui_lock_and_blocks_queued_action(self):
+        import socket, threading, json, time
+        from bridge_control import TaskRegistry
+        b.TASKS = TaskRegistry()
+        sockets, threads = [], []
+        def connect(req):
+            caller, server = socket.socketpair()
+            caller.settimeout(2)
+            sockets.append(caller)
+            thread = threading.Thread(target=b._serve_conn, args=(server, 'secret'), daemon=True)
+            threads.append(thread); thread.start()
+            caller.sendall((json.dumps(dict(token='secret', **req)) + '\n').encode())
+            return caller
+        def read(caller):
+            data = b''
+            while b'\n' not in data:
+                data += caller.recv(4096)
+            return json.loads(data)
+        b.GUI_LOCK.acquire()
+        try:
+            with patch.object(b, 'dispatch') as dispatch:
+                action = connect(dict(op='click', task_id='queued-task-0001'))
+                end = time.monotonic() + 1
+                while 'queued-task-0001' not in b.TASKS.tasks and time.monotonic() < end:
+                    threading.Event().wait(0.005)
+                response = read(connect(dict(op='cancel_task', task_id='queued-task-0001')))
+                self.assertFalse(response['stop_confirmed'])
+                b.GUI_LOCK.release()
+                final = read(action)
+                self.assertTrue(final['stop_confirmed'])
+                self.assertEqual(final['state'], 'cancelled')
+                dispatch.assert_not_called()
+                tombstone = read(connect(dict(op='cancel_task', task_id='late-request-0001')))
+                self.assertTrue(tombstone['stop_confirmed'])
+                late = read(connect(dict(op='click', task_id='late-request-0001')))
+                self.assertFalse(late['ok'])
+                dispatch.assert_not_called()
+        finally:
+            try:
+                b.GUI_LOCK.release()
+            except RuntimeError:
+                pass
+            for caller in sockets:
+                caller.close()
+            for thread in threads:
+                thread.join(1)
+
+    def test_resident_stalled_native_call_retains_unconfirmed_state_until_return(self):
+        import socket, threading, json
+        from bridge_control import TaskRegistry
+        from contextlib import nullcontext
+        b.TASKS = TaskRegistry()
+        entered, release = threading.Event(), threading.Event()
+        def dispatch(op, args):
+            entered.set()
+            release.wait(2)
+            return {}
+        caller, server = socket.socketpair(); caller.settimeout(2)
+        thread = threading.Thread(target=b._serve_conn, args=(server, 'secret'), daemon=True)
+        with patch.object(b, 'gui_transaction', nullcontext), patch.object(b, 'dispatch', dispatch):
+            thread.start()
+            caller.sendall((json.dumps(dict(token='secret', op='click', task_id='native-task-0001')) + '\n').encode())
+            self.assertTrue(entered.wait(1))
+            pending = b.TASKS.control('native-task-0001', cancel=True)
+            self.assertFalse(pending['stop_confirmed'])
+            self.assertTrue(pending['may_have_applied'])
+            release.set()
+            data = b''
+            while b'\n' not in data:
+                data += caller.recv(4096)
+            final = json.loads(data)
+            self.assertTrue(final['stop_confirmed']); self.assertEqual(final['state'], 'cancelled')
+        caller.close(); thread.join(1)
 
 
 unittest.main(argv=['bridge-mocks'], verbosity=2)

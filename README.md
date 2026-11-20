@@ -6,15 +6,17 @@
 
 将拓扑构建、设备配置、协议检查、业务探测和报告取证连接成一套可重复执行的实验流程。适用于网络教学、协议实验、园区方案验证，以及需要通过 AI 客户端调用 eNSP 的开发者。
 
-- **统一调用**：三个入口复用同一组 19 个工具，配套 50 个实验指导和 2 个 DSH 技能；47 个场景可直接生成拓扑与地址配置骨架。
+- **统一调用**：三个入口复用同一组 19 个工具，配套 50 个实验指导和 3 个 DSH 技能；47 个场景可直接生成拓扑与地址配置骨架。
 - **完整流程**：从生成拓扑、配置前探查、下发命令，到等待收敛、执行断言和整理证据。
 - **可追溯结果**：支持变更预览、控制台锁、工程配置检查点、控制台诊断和脱敏日志导出；验收区分通过、失败、错误和未执行。
 
-当前版本 **1.1.3**，支持 **DSH 0.2.2-rc.1 和 0.2.2-rc.3**。本版适配 rc.3 宿主，修复冻结参数、失败结果上报与工程配置资产检查，并完善 CLI 交互、控制台诊断和日志脱敏。详见 [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md)和[完整更新日志](CHANGELOG.md)。npm 尚未发布，请按下文使用源码或本地打包安装。
+当前源码候选 **1.1.6**，支持 DSH 0.2.2-rc.1、rc.3 和 rc.5。批量 CLI 继承视图及保存选项，日志可按原始 ID 选择后脱敏。绘图技能通过 ensp_topo 离线检查和修正标签重叠，输出可编辑的拓扑副本。[1.1.6 更新说明](docs/releases/1.1.6.zh-CN.md)
+
+2026-11-19 的未发布源码新增 [M1 失败判定与崩溃取证](docs/M1-IMPLEMENTATION.zh-CN.md)、[M2 取消与统一截止时间](docs/M2-IMPLEMENTATION.zh-CN.md)。取消后检查停止证据；未确认动作不重放。候选包与已运行桌面的部署状态需分别核验。
 
 > 软件检查与设备业务分别验收：当前软件测试及目标 DSH 宿主服务验证通过，**园区现场业务总验收仍为 FAIL**。冷 ARP 丢包、端到端吞吐瓶颈及指定 S5700 固件的 TCP 隔离问题仍待解决。见[验收摘要](docs/TOTAL-ACCEPTANCE.zh-CN.md)和[已知问题](docs/KNOWN-ISSUES.zh-CN.md)。
 
-**未发布源码增强**：本轮对照上游 0.8.0，补充 50 场景蓝图、按场景生成拓扑及地址配置预览。包版本暂保持 1.1.3，历史部署和现场结果仍对应当时构建；新增能力用法和边界见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。
+**源码增强**：本轮对照上游 0.8.0，补充 50 场景蓝图、按场景生成拓扑及地址配置预览。自 1.1.4 候选起打包，历史部署和现场结果仍对应当时构建；新增能力用法和边界见[场景实验说明](docs/SCENARIO-LABS.zh-CN.md)。
 
 ## 能做什么
 
@@ -34,8 +36,8 @@
 | 项目 | 当前要求与已验证范围 |
 | --- | --- |
 | Node.js | 20 及以上；源码安装使用 npm 和锁文件 |
-| DSH 插件 | DSH **0.2.2-rc.1、0.2.2-rc.3**；其他宿主版本需另行核验 |
-| Node 依赖 | `@deepseek-ai/dsh-tools` 仅接受上述两个版本；锁文件使用 rc.3；`@deepseek-ai/schemastery@3.19.0` |
+| DSH 插件 | DSH **0.2.2-rc.1、0.2.2-rc.3、0.2.2-rc.5**；其他宿主版本需另行核验 |
+| Node 依赖 | `@deepseek-ai/dsh-tools` 仅接受上述三个版本；锁文件使用 rc.3；`@deepseek-ai/schemastery@3.19.0` |
 | MCP / CLI | 独立运行，无需启动 DSH；仍需安装本包的 Node 依赖 |
 | GUI 自动化 | Windows 交互桌面、eNSP、Python、pywin32、Pillow，以及匹配的权限 |
 | Word 报告 | 文档解释器安装 python-docx |
@@ -55,7 +57,7 @@ node bin/dsh-ensp-mcp.mjs --version
 node bin/ensp-fusion.mjs tools
 ```
 
-当前版本应显示 `1.1.3`，`tools` 应列出 19 项及其参数 schema。这两条检查命令不会启动 eNSP。
+当前源码候选应显示 `1.1.6`，`tools` 应列出 19 项及其参数 schema。这两条检查命令不会启动 eNSP。
 
 ### 2. 生成第一个拓扑
 
@@ -85,7 +87,7 @@ node bin/ensp-fusion.mjs call ensp_cli (Join-Path $Lab 'cli-plan.json') $Lab
 **DSH 插件**：在源码根目录运行 `npm pack --ignore-scripts`，然后将生成的包安装到实际使用的 profile。以下以 `desktop` 为例：
 
 ```powershell
-dsh plugin --profile desktop add "C:/tools/dsh-ensp-fusion/dsh-ensp-fusion-1.1.3.tgz"
+dsh plugin --profile desktop add "C:/tools/dsh-ensp-fusion/dsh-ensp-fusion-1.1.6.tgz"
 ```
 
 替换为实际包路径。首次接入还需按[DSH 配置说明](docs/DEPLOYMENT.zh-CN.md#4-dsh接入)合并 bundle；升级后重新加载插件。DSH rc.3 会拒绝旧 1.1.2 的 rc.1 单版本声明；若仍显示旧版，检查实际加载路径和缓存，并通过 `ensp_status` 核对版本、构建指纹及加载时间。
@@ -142,7 +144,7 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 | `ensp_doc` | 生成带图文或基于模板的 Word 报告 | 需要 Python 文档依赖 |
 | `ensp_project` | 核对工程配置内容、创建检查点和对比磁盘资产 | 检查点不含 VM 磁盘；不证明重开加载 |
 | `ensp_console_diagnose` | 单次控制台探测、按 UUID 关联串口与同步日志 | 只读诊断，不自动重启、不把 `#` 当 VRP |
-| `ensp_logexport` | 从 JSONL/连续 Zstandard 会话生成脱敏副本 | 原日志不改写；Zstandard 需 Node 22.15+ |
+| `ensp_logexport` | 从 JSONL/连续 Zstandard 会话生成脱敏副本，可按 operation_id 或 call_id 精确导出完整错误 | 原日志不改写，两种筛选互斥；Zstandard 需 Node 22.15+ |
 
 通用构建器支持 **12 种型号**：S5700、S3700、AR2220、AR2240、AR1220、USG5500、USG6000V、AC6005、PC、Client、Server、Cloud。设备名使用 ASCII 标识符。Client/Server 支持原生 Ethernet 及 IPv4/DNS 启动参数；应用服务目录和启动状态需单独恢复、检查。
 
@@ -154,7 +156,7 @@ MCP 使用 stdio。GUI 和 Word 功能的解释器可分别通过 `--python`、`
 | --- | --- | --- |
 | 软件回归 | PASS | 308 项 Node 测试、24 项 MCP 冒烟 |
 | 分发检查 | PASS | 插件检查、离线干净安装、外部目录 CLI、MCP 初始化及发布前检查 |
-| DSH 0.2.2-rc.3 宿主服务 | PASS | 隔离宿主中的兼容性判定、19 工具、2 技能、系统提示、原生执行器和卸载清理；另有 rc.1 SDK 回归 |
+| DSH 0.2.2-rc.5 宿主服务 | 隔离检查 PASS | 当前 M2.1 已检查兼容性、19 工具、2 技能、诊断结果、GUI 静态拒绝、取消与卸载；实时桌面会话仍未验证，锁文件保留 rc.3 SDK 回归 |
 | 三台 USG 配置持久化 | PASS | 真实 VRP 控制台、版本及配置回读；设备保存、工程关闭并同路径重开后，选定关键项 39/39/23 全部匹配 |
 | 桌面安装与运行会话同步 | PASS（本机） | GitHub 安装副本已通过宿主检查；运行中 `ensp_status` 的安装路径与构建指纹均已匹配，包含两项资产检查修复；见 [部署核验](docs/releases/1.1.3.zh-CN.md#后续部署核验) |
 | 园区业务总验收 | **FAIL** | 冷 ARP、端到端吞吐及指定固件 TCP 隔离仍有失败 |
@@ -210,7 +212,7 @@ npm run check:dsh -- --app "C:/path/to/DeepSeek Harness.exe"
 
 | 文档 | 内容 |
 | --- | --- |
-| [1.1.3 更新说明](docs/releases/1.1.3.zh-CN.md) / [更新日志](CHANGELOG.md) | DSH rc.3 兼容修复、升级及历史变更 |
+| [1.1.6 更新说明](docs/releases/1.1.6.zh-CN.md) / [更新日志](CHANGELOG.md) | 当前候选、配置资产与错误证据修复；历史版本另有记录 |
 | [部署手册](docs/DEPLOYMENT.zh-CN.md) | DSH/MCP/CLI 接入、依赖与排错 |
 | [场景实验准备](docs/SCENARIO-LABS.zh-CN.md) | 50 场景、47 蓝图生成、地址配置与当前限制 |
 | [统一验收](docs/ACCEPTANCE-RUNNER.zh-CN.md) / [变更管理](docs/CHANGE-MANAGEMENT.zh-CN.md) | 计划、断言、日志和恢复 |

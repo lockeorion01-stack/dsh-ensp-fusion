@@ -1,7 +1,9 @@
 // Offline MCP context tests: real topology reads plus stubbed tool failures.
 // Run with: node --test test/mcp-context.test.mjs
 import assert from 'node:assert/strict'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
@@ -35,6 +37,34 @@ async function readResource(server, uri) {
 function callTopo(server, args = LIST_ARGS) {
   return call(server, 'tools/call', { name: 'ensp_topo', arguments: args })
 }
+
+test('MCP exact log export retains failed content and rejects conflicting selectors without a file', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ensp-mcp-export-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const server = createMcpServer({ workspace, quiet: true })
+  const result = { ok: false, failure: { phase: 'connect', kind: 'transport', message: 'ECONNREFUSED' },
+    skipped: ['display version'], execution: { operation_id: 'offline-op', call_id: 'offline-call:ptc:1', status: 'failed', tool: 'ensp_cli' } }
+  await writeFile(join(workspace, 'session.jsonl'), JSON.stringify({ type: 'tool/ptc-dispatch', data: {
+    subCallId: 'offline-call:ptc:1', isError: true, content: [{ type: 'text', text: JSON.stringify(result) }],
+  } }))
+  const tools = (await call(server, 'tools/list')).result.tools
+  const schema = tools.find(tool => tool.name === 'ensp_logexport').inputSchema
+  assert.equal(schema.properties.operation_id.type, 'string')
+  assert.equal(schema.properties.call_id.type, 'string')
+  const exported = await call(server, 'tools/call', { name: 'ensp_logexport', arguments: {
+    source: 'session.jsonl', destination: 'evidence.json', call_id: 'offline-call:ptc:1',
+  } })
+  assert.equal(exported.result.isError, false)
+  assert.equal(JSON.parse(exported.result.content[0].text).structuredResults, 1)
+  const artifact = JSON.parse(await readFile(join(workspace, 'evidence.json'), 'utf8'))
+  assert.deepEqual(artifact.results[0].result, result)
+  assert.equal(artifact.results[0].isError, true)
+  const rejected = await call(server, 'tools/call', { name: 'ensp_logexport', arguments: {
+    source: 'session.jsonl', destination: 'rejected.json', operation_id: 'offline-op', call_id: 'offline-call:ptc:1',
+  } })
+  assert.equal(rejected.result.isError, true)
+  await assert.rejects(readFile(join(workspace, 'rejected.json')), { code: 'ENOENT' })
+})
 
 test('advertises resources and prompts; workspace resource reports effective configuration', async () => {
   const server = createServer()
@@ -118,7 +148,7 @@ test('tool ok=false is an MCP error, retains details, and cannot replace the las
     assert.equal((await call(server, 'tools/call', { name })).result.isError, true)
     for (const value of [{ ok: true }, { ok: 0 }, { ok: 'false' }, {}]) {
       registered.handler = async () => value
-      assert.equal((await call(server, 'tools/call', { name })).result.isError, false)
+      assert.equal((await call(server, 'tools/call', { name })).result.isError, value.ok !== true)
     }
   }
 })
@@ -185,7 +215,7 @@ test('notifications never respond on any known method, including success and err
       assert.deepEqual(sent, [], `${method} notification must not respond`)
     }
   }
-  assert.equal((await readResource(server, TOPOLOGY_URI)).devices.length, 3)
+  assert.equal((await readResource(server, TOPOLOGY_URI)).devices.length, 0, 'tool notifications must not dispatch actions without a request identity')
   const tool = server.registry.tools.find(({ name }) => name === 'ensp_topo')
   tool.handler = async () => ({ ok: false, reason: 'offline failure' })
   const sent = []

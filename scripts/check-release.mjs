@@ -70,7 +70,7 @@ async function main(){
  const pack=JSON.parse(run(npm,['pack','--dry-run','--ignore-scripts','--json']))[0]
  const packed=new Set(pack.files.map(f=>f.path))
  for(const file of ['README.md','CHANGELOG.md','CONTRIBUTING.md','docs/releases/'+pkg.version+'.zh-CN.md','docs/KNOWN-ISSUES.zh-CN.md','LICENSE','LICENSE-MIT'])if(!packed.has(file))issue(file,'required distributed documentation missing from package')
- for(const file of packed)if(forbidden.test(file)||privateDir.test(file))issue(file,'local/private artifact is packed')
+ for(const file of packed)if(forbidden.test(file)||privateDir.test(file)||/(?:^|\/)__pycache__\//u.test(file)||/\.py[co]$/iu.test(file))issue(file,'local/private artifact is packed')
  const report={ok:findings.length===0,version:pkg.version,publication:pkg.private?'local package only; no Git mutation or network operation':'public npm package; no Git mutation or network operation',checks:{documents:docs.length,relative_links:links,git_candidates:candidate.length,text_files_scanned:scanned,package_files:packed.size,ignore_probes:probes.length},findings,limits:['Finite filename and high-confidence content patterns; not a complete secret scanner.','Does not inspect Git history, remote repository, dependency vulnerabilities, or device business.']}
  console.log(JSON.stringify(report,null,2));if(!report.ok)process.exitCode=1
 }
